@@ -1,0 +1,168 @@
+﻿# Mercado Pago Suscripciones — Propi
+
+Implementación en Next.js App Router (Node runtime), sin backend separado. **No se activó en una cuenta real, no se creó ningún plan y no se realizaron cobros.** El build y las pruebas locales no reemplazan las pruebas de autorización, cobro y webhook con el vendedor configurado.
+
+## Decisiones de integración
+
+- `src/lib/billing/catalog.json` es el catálogo central: Propi Premium, ARS 14.900, cada mes. Para cambiar el precio, editar este archivo en el servidor y registrar un plan compatible. No se admite precio, usuario ni plan desde el navegador. Los acuerdos existentes conservan su importe; el panel muestra el de cada acuerdo.
+- Se investigó el SDK oficial Node 3.6.1 (Node >=18). Se utiliza un adaptador REST tipado sobre `fetch` hacia la API oficial: este entorno no pudo descargar el paquete por restricciones de red. No se agregó una dependencia que no pudiera instalarse/verificarse. Este punto difiere de la preferencia por el SDK; todos los endpoints son oficiales y pueden conservarse al sustituir el transporte.
+- **El plan se registra mediante `/preapproval_plan`, pero el checkout alojado crea `/preapproval` sin asociación formal al plan**, con estado `pending`. La documentación del flujo con plan exige `card_token_id` y `authorized`; el flujo sin plan permite iniciar pendiente y autorizar en la página alojada de Mercado Pago. Para conservar la experiencia solicitada sin capturar/tokenizar tarjetas en Propi se implementa esta alternativa documentada. No se envía `preapproval_plan_id` combinado con un flujo que no está documentado. El plan configurado se consulta y valida como catálogo contra vendedor, importe, moneda, frecuencia, estado y URL antes de contratar. No se afirma que esas suscripciones estén asociadas al plan en el panel del proveedor.
+- El email del pagador se solicita explícitamente; no se presupone que sea el de Supabase. No se almacena ese email localmente. Nunca se capturan ni almacenan tarjetas.
+- Las capacidades existentes son propiedades, colecciones y personalización de color/portada. No se comercializan estadísticas avanzadas ni funciones aún inexistentes. Free conserva 5 propiedades publicadas y 1 colección activa; Premium tiene un límite técnico de 1.000 de cada una.
+
+Fuentes oficiales: [suscripciones](https://www.mercadopago.com.ar/developers/es/docs/subscriptions/overview), [flujo con plan](https://www.mercadopago.com.ar/developers/es/docs/subscriptions/integration-configuration/subscription-associated-plan), [checkout pendiente sin plan](https://www.mercadopago.com.ar/developers/es/docs/subscriptions/integration-configuration/subscription-no-associated-plan/pending-payments), [SDK oficial](https://github.com/mercadopago/sdk-nodejs).
+
+## Configuración por entorno
+
+Copiar nombres desde `.env.example`, sin subir `.env.local`. No enviar secretos por chat. Configurarlos en variables privadas de Vercel y reiniciar/recompilar después de cambios:
+
+| Variable | Uso |
+| --- | --- |
+| `NEXT_PUBLIC_SUPABASE_URL` | URL del proyecto Supabase existente |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Clave pública existente; acepta anon legacy |
+| `SUPABASE_SECRET_KEY` | Clave secret o service_role existente, solo servidor |
+| `NEXT_PUBLIC_SITE_URL` | Origen HTTPS público estable, sin ruta; ejemplo `https://tu-dominio.com` |
+| `MERCADOPAGO_ACCESS_TOKEN` | Access Token privado del vendedor argentino correspondiente al entorno |
+| `MERCADOPAGO_WEBHOOK_SECRET` | Firma secreta de Webhooks de la aplicación de Mercado Pago |
+| `MERCADOPAGO_PRO_PLAN_ID` | ID del plan previamente creado/registrado |
+| `CRON_SECRET` | Secreto aleatorio independiente de al menos 32 caracteres |
+
+- **Development:** el producto normal continúa en `http://localhost:3100` sin configurar `NEXT_PUBLIC_SITE_URL` y con contratación deshabilitada. Para probar pagos usar una instalación HTTPS pública de prueba o túnel HTTPS accesible al proveedor y al navegador; no usar una IP local. Su URL debe coincidir con el plan, retorno y orígenes de la app. No mezclar entornos en una misma base.
+- **Preview:** proyecto Supabase y vendedor de prueba aislados, dominio de preview estable. No copiar secretos de producción indiscriminadamente a previews de PR. El dominio aleatorio de cada despliegue no sirve como URL estable de un plan.
+- **Production:** dominio HTTPS definitivo, base de producción, credenciales del vendedor real, plan compatible y webhook de esa aplicación. Las variables `MERCADOPAGO_*`, `SUPABASE_SECRET_KEY` y `CRON_SECRET` nunca llevan prefijo `NEXT_PUBLIC_`.
+- Registrar también los orígenes/retornos de Supabase Auth para ese dominio. Se conserva el sistema de sesión existente; los endpoints verifican el JWT Bearer con `auth.getUser()` en Supabase, no con datos del cliente.
+
+## Migración
+
+Si las primeras tres migraciones ya están aplicadas, ejecutar **solamente** `supabase/migrations/202610200001_billing.sql` una vez, mediante el SQL Editor de Supabase o `supabase db push` con el historial correctamente vinculado. No repetir las migraciones anteriores ni ejecutar `seed.sql` en producción. Un proyecto nuevo aplica todas las migraciones en orden.
+
+No se alteran las columnas de `subscriptions` existentes: se agrega un libro de acuerdos/cobros separado, se extienden las funciones de autorización y se conserva compatibilidad con Pro otorgado administrativamente antes de esta integración (`provider` distinto de `mercadopago`). No otorgar Pro manualmente a acuerdos de Mercado Pago modificando la tabla: el acceso real proviene de las evidencias de pago.
+
+Tablas nuevas:
+
+- `billing_agreements`: propietario, referencia externa aleatoria de 256 bits, ID del proveedor, catálogo, importe, estado, reserva de creación, cursor de recuperación y sincronización.
+- `subscription_payments`: facturas/cobros únicos, importe, moneda, aprobación validada y cobertura de servicio.
+- `billing_webhook_events`: bandeja durable mínima, sin cuerpo original ni datos de tarjeta; reintentos, estado e idempotencia.
+- `billing_plan_registry`: registro administrativo del plan e intentos de creación.
+- `private.billing_locks` y `private.billing_rates`: exclusión mutua con lease y token de cercado, y rate limits compartidos entre instancias.
+
+RLS permite a cada usuario leer únicamente sus acuerdos/cobros. Los usuarios no pueden escribirlos ni consultar los eventos, el registro administrativo o funciones privilegiadas. Las escrituras requieren la clave privada del servidor. No hay endpoint que cambie planes arbitrariamente.
+
+## Registrar el plan sin duplicarlo
+
+El comando sin opciones **solo valida** un plan existente. Necesita la migración aplicada y configuración de Supabase, vendedor y URL. No necesita el ID de plan si se lo va a crear explícitamente.
+
+```powershell
+npm.cmd run billing:plan -- --help
+# Vista previa local, sin llamadas ni escrituras externas:
+npm.cmd run billing:plan -- --dry-run
+npm.cmd run billing:plan
+# Registrar un plan existente compatible:
+npm.cmd run billing:plan -- --adopt <ID_DEL_PLAN>
+# SOLO cuando el operador decida crear el plan en la cuenta correspondiente:
+npm.cmd run billing:plan -- --create
+```
+
+`--create` es una acción administrativa explícita: crea un plan del vendedor, no un pago ni una suscripción. No ejecutarlo en instalación/build/tests. El comando adquiere un lock de PostgreSQL y persiste el intento antes del POST; si la respuesta es ambigua no vuelve a crear automáticamente. Revisar los planes del vendedor y usar `--adopt ID`. Repetir `--create` con un plan registrado lo valida/reutiliza. Se imprime únicamente el ID no secreto que debe configurarse en `MERCADOPAGO_PRO_PLAN_ID`.
+
+El ID devuelto se guarda en `public.billing_plan_registry` antes del GET de verificación. Si ese GET falla, la siguiente ejecución reutiliza el ID guardado. Sin opciones, el comando solo consulta y valida; no crea filas ni modifica el registro. `--dry-run` muestra el cuerpo previsto y los nombres de configuración faltantes sin consultar Supabase ni Mercado Pago; un `back_url: null` indica que todavía falta definir la URL y **no se enviaría a la API**.
+
+Para comprobar la creación, ejecutar `npm.cmd run billing:plan` después de configurar el ID: hace `GET /preapproval_plan/{id}` y verifica vendedor, estado `active`, nombre `Propi Premium`, ARS 14.900, frecuencia mensual sin prueba gratuita ni fecha de fin, y URL de retorno exacta. El mensaje `Plan validado` confirma esas comprobaciones; no confirma un cobro ni una suscripción de comprador. También puede revisarse el ID desde la cuenta vendedora en Mercado Pago. Referencia: [crear planes mediante la API oficial](https://www.mercadopago.com.ar/developers/es/reference/online-payments/subscriptions/create-preapproval-plan/post).
+
+El precio de referencia no modifica planes existentes en Mercado Pago automáticamente. Para cambiarlo, registrar/adoptar un plan compatible y desplegar catálogo y ID juntos; probar la nueva contratación antes de habilitarla públicamente.
+
+## Endpoints y flujo
+
+| Ruta | Autorización / comportamiento |
+| --- | --- |
+| `POST /api/billing/subscribe` | JWT Supabase y Origin exacto. Cuerpo estricto `{payer_email}`. Reserva durable, lock de propietario y unicidad antes del POST remoto. Reutiliza checkout pendiente. |
+| `GET /api/billing/status?refresh=1` | JWT Supabase. Devuelve solamente facturación del usuario. La actualización remota tiene throttle y backoff. |
+| `POST /api/billing/cancel` | JWT, Origin y `{confirm:true}`. Cancela en Mercado Pago y relee el estado canónico. |
+| `POST /api/mercadopago/webhook` | Firma oficial y actualidad, sin sesión de usuario. Reconsulta recursos oficiales. |
+| `GET /api/billing/reconcile` | Bearer `CRON_SECRET` con comparación constante. Procesa reintentos y acuerdos pendientes de revisión. |
+
+Todos usan Node runtime, respuestas `no-store`, errores sin secretos y validación de permisos en servidor. Los POST de usuario no aceptan `user_id`, precio o plan. Nunca se repite automáticamente un POST remoto ambiguo, aunque venza el lock. El estado `uncertain` bloquea nuevas contrataciones hasta recuperar el ID o una resolución administrativa comprobada.
+
+El dashboard está en `/dashboard/billing`. El retorno es `/dashboard/billing/return`: consulta al backend, espera confirmación y permite reintentar. Visitar la URL, cambiar parámetros o recibir `authorized` no habilita Premium.
+
+## Webhooks
+
+En Mercado Pago Developers, seleccionar la aplicación del vendedor, configurar como URL HTTPS:
+
+```
+https://tu-dominio.com/api/mercadopago/webhook
+```
+
+Habilitar los eventos disponibles de **Suscripciones y planes** y **Pagos**. Se manejan los tipos oficiales `subscription_preapproval`, `subscription_authorized_payment`, `subscription_preapproval_plan` y `payment`. El evento de plan no concede acceso: se reconoce y se ignora; el plan se verifica al contratar. Estados de acuerdos admitidos: `pending`, `authorized`, `paused`, `cancelled` (y compatibilidad `canceled`). No se inventa un evento `subscription_expired`: el vencimiento de acceso se calcula con evidencia vigente.
+
+Guardar la firma secreta del panel en `MERCADOPAGO_WEBHOOK_SECRET`. Se exige `data.id` único en query, coincidencia con el cuerpo, `x-request-id` y `x-signature`. Se valida HMAC SHA256 del manifiesto oficial `id:<id normalizado>;request-id:<request-id>;ts:<ts>;` con comparación constante. Se aceptan timestamps de segundos o milisegundos dentro de cinco minutos; sincronizar el reloj del servidor. Un replay con firma antigua obtiene 401. La reconciliación recupera cambios incluso si un reintento del proveedor conserva un timestamp demasiado antiguo.
+
+La notificación se guarda antes de procesar. Los duplicados con mismo request/recurso se deduplican; otros request IDs del mismo recurso también convergen mediante locks, IDs únicos y versiones monotónicas. Siempre se consulta el recurso oficial, la suscripción y los cobros aplicables. Se valida referencia externa, vendedor, ID de suscripción, pagador cuando está disponible, moneda, importe y devolución. Los snapshots antiguos no revierten estados posteriores ni resucitan una cancelación. Los cobros se actualizan según su propia versión, sin depender del orden de llegada del webhook.
+
+Respuesta 200 para procesado/ignorado, 400 para cuerpo inválido, 401 para firma inválida o vencida, 429 para exceso de solicitudes y 503 para errores temporales. Los eventos fallidos quedan disponibles para reintento con backoff. No se guardan cuerpos originales ni se registran tokens, emails, tarjetas o payloads completos en logs.
+
+Referencia: [Webhooks oficiales](https://www.mercadopago.com.ar/developers/es/docs/your-integrations/notifications/webhooks).
+
+## Fuente de verdad y cobertura
+
+`private.effective_plan()` y los RPC `get_user_entitlements()` (solo el usuario actual) / `billing_get_entitlements()` (solo servidor) determinan el plan efectivo en tiempo de consulta. `getUserEntitlements()` es el servicio TypeScript. `subscriptions.plan` es una proyección de compatibilidad, **no una autorización fiable al vencer un período**. Todos los límites/personalización usan la función efectiva, incluso si un cron no se ejecuta. Las concesiones administrativas previas se mantienen separadas.
+
+Para habilitar inicialmente Premium se requiere:
+
+1. Acuerdo canónico correlacionado del vendedor, ya autorizado, en pausa o cancelado con cobertura pagada previa; una suscripción pendiente no concede acceso.
+2. Factura de suscripción ligada al acuerdo y un pago consultado en `/v1/payments/{id}`, `approved`, por el importe completo esperado en ARS, sin reembolso.
+3. Fecha de aprobación válida y cobertura actual de servicio.
+
+**La API no aporta un `current_period_end` contractual.** Propi define explícitamente una regla de servicio: cada factura pagada cubre desde `debit_date` hasta un mes calendario después, respetando el offset horario y ajustando fin de mes (31/01 → 28/02 o 29/02). Es una fecha derivada de Propi, no un vencimiento devuelto por Mercado Pago. Una aprobación tardía no mueve el ciclo ni regala otro mes. `next_payment_date`, si existe, se muestra solo como próximo intento informado por el proveedor. No hay período de gracia.
+
+Un cobro rechazado no agrega cobertura; un período anterior aprobado permanece hasta vencer. Reintegros, devoluciones parciales y contracargos revocan la evidencia de ese cobro al sincronizar. Una pausa/cancelación no genera cobertura nueva. Mercado Pago cancela el acuerdo **ahora**: Propi no promete una cancelación diferida del proveedor, pero conserva el acceso ya abonado hasta su fecha derivada, salvo reversión del pago. No hay reembolso automático al cancelar.
+
+Al volver a Free se conservan los datos, publicaciones existentes, portadas y colores. Se permite editar, archivar y retirar contenido; solo se impiden nuevas publicaciones/activaciones que excedan 5/1, y nuevas personalizaciones premium. La exclusión mediante fila bloqueada serializa los límites. No se elimina ni despublica contenido automáticamente.
+
+## Reconciliación y operación
+
+`vercel.json` solicita un cron cada diez minutos. **Esa frecuencia requiere Vercel Pro/Enterprise**; Hobby admite ejecución diaria, insuficiente para esta frecuencia y puede rechazar el deployment. En Hobby quitar la entrada `crons` y configurar un scheduler externo confiable cada diez minutos que invoque la misma URL con `Authorization: Bearer <CRON_SECRET>` mediante un gestor de secretos. No hacer pública ni colocar la clave en la URL. [Límites de Vercel Cron](https://vercel.com/docs/cron-jobs/usage-and-pricing).
+
+Cada pasada procesa hasta 2 eventos reintentables y 10 acuerdos vencidos para revisión, ordenados por fecha. Los acuerdos se revisan cada hora y los errores después de cinco minutos; los eventos tienen backoff de hasta una hora. Hay presupuesto global de llamadas MP de 45 segundos (8 segundos máximo por petición) dentro de Route Handlers de 60 segundos. Una interrupción conserva reservas/eventos y nunca habilita por error. Configurar alertas del scheduler ante HTTP no exitoso **y ante `failed > 0` en JSON**. Monitorear en Supabase antigüedad de eventos pendientes/failed, `sync_error`, acuerdos `uncertain` y retrasos de `reconcile_after`; esta configuración externa no está aprovisionada por el repositorio.
+
+Recuperación de creaciones ambiguas: `/preapproval/search` no documenta filtro por referencia externa; se recorre la lista del vendedor en páginas de 100 con cursor persistido y comparación exacta de la referencia aleatoria, luego se obtiene el recurso canónico. No se agregan filtros ficticios ni se reinicia el POST. En vendedores con muchos acuerdos puede requerir varias pasadas. El webhook de suscripción también recupera por referencia. No marcar un intento incierto como fallido solo porque no aparece inmediatamente; verificar definitivamente en el proveedor y cancelar cualquier acuerdo encontrado antes de permitir otra contratación.
+
+Límites por sincronización: hasta 500 facturas por acuerdo y 8 consultas de pagos actuales/recientes. Si se exceden, falla cerrado y conserva el último estado; requiere ampliar el procesamiento con cursor antes de superar esos volúmenes. El presupuesto por pasada y el scheduler deben ajustarse antes de escalar a muchos suscriptores; no se promete sincronización instantánea ni reconciliación ilimitada. Se siguen reconciliando acuerdos cancelados para detectar reversión de pagos previos. Definir retención/borrado de eventos según obligaciones operativas y fiscales antes del lanzamiento; no se borran cobros automáticamente.
+
+## Pruebas y activación
+
+```powershell
+npm.cmd test
+npm.cmd run test:db
+npm.cmd run typecheck
+npm.cmd run build
+npm.cmd run test:e2e -- --workers=1
+```
+
+Las pruebas unitarias usan fixtures del proveedor y no hacen llamadas de pago. Cubren firmas, anti-replay, validación del catálogo y recursos, precio/moneda, aprobación, rechazos, devoluciones, cobertura de meses, reserva antes del POST, ambigüedad/concurrencia y rechazo de endpoints sin sesión/origen válido. Las pruebas PostgreSQL/PGlite aplican las migraciones reales y prueban RLS, funciones, duplicados, locks/leases, períodos, downgrade y límites. Auth y Storage HTTP requieren Supabase real; las pruebas locales no equivalen a un checkout integrado en Mercado Pago.
+
+Para probar oficialmente: crear vendedor y comprador de prueba de Argentina con la aplicación/configuración correspondiente. La documentación de Suscripciones indica usar credenciales de producción **de la cuenta vendedora de prueba** y tarjetas de prueba nacionales; no asumir que un token `TEST-` ni el sandbox de Checkout Pro representan todos los flujos de Suscripciones. Verificar las opciones habilitadas para la aplicación del vendedor. No usar la misma cuenta como vendedor y comprador. No compartir credenciales entre producción y pruebas.
+
+Fuentes: [prueba de aprobación de Suscripciones](https://www.mercadopago.com.ar/developers/es/docs/subscriptions/integration-test/payment-approval), [aclaraciones oficiales de pruebas](https://www.mercadopago.com.ar/developers/es/news/2023/11/16/Questions-on-how-to-test-your-integration--).
+
+Antes de anunciar la integración como lista para producción falta completar y dejar evidencia de:
+
+- Aplicar migración en el proyecto de destino y comprobar RLS con dos usuarios reales autenticados.
+- Configurar secretos privados, URL HTTPS, vendedor, registrar/adoptar plan y validar comando sin opciones.
+- Registrar Webhooks, verificar firma real del proveedor y entrega/reintentos; ejecutar scheduler autenticado y alertas.
+- Recorrer registro/login → contratación → autorización → primer pago aprobado → Premium → publicación por encima de Free → renovación y cancelación con cobertura restante. Probar también abandono, rechazo, reembolso/contracargo y acceso vencido.
+- Confirmar tiempos/estados y disponibilidad de pruebas que ofrece la cuenta de Mercado Pago concreta. No realizar un cobro real sin autorización explícita del operador.
+- Revisar términos comerciales, identificación del operador, facturación fiscal, soporte, política de datos y observabilidad. Las páginas legales siguen siendo documentos base pendientes de revisión.
+
+No hay credenciales inventadas ni activación ficticia. Hasta completar esta lista la integración está implementada en código y validada localmente, **pendiente de activación y validación externa**.
+
+## Resultado de verificación local
+
+- `npm run build`: aprobado con Next.js 16.4.2, incluidos los cinco Route Handlers nuevos y ambas páginas de facturación.
+- `npm run typecheck`: aprobado; el build final también completó su comprobación TypeScript.
+- `npm test`: 30 pruebas aprobadas.
+- `npm run test:db`: 29 pruebas PostgreSQL/RLS aprobadas con las cuatro migraciones aplicadas en PGlite.
+- E2E final con un worker: 20 aprobados y 2 omitidos porque requieren Supabase real. Los cuatro casos nuevos de facturación (dos flujos en escritorio/celular) usan respuestas de red de prueba; no validan un cobro real.
+- El comando administrativo se comprobó con `--help` y validación sintáctica; no se ejecutó `--create` ni se contactó a un vendedor para crear planes.
+
+En la verificación inicial faltaban las variables de Mercado Pago, cron y URL pública. En la revisión posterior del script administrativo se confirmó, sin mostrar su valor ni enviarlo al proveedor, que `MERCADOPAGO_ACCESS_TOKEN` ya está declarado y cargado desde `.env.local`. La vista previa indicó que falta `NEXT_PUBLIC_SITE_URL` para preparar la creación del plan; todavía no se ejecutó esa creación. Las cuatro pruebas adicionales del comando administrativo y `npm run typecheck` pasaron. La migración remota, configuración del proveedor y pruebas integradas siguen pendientes. Una pasada previa del navegador sufrió timeouts durante la recompilación del servidor de desarrollo; la pasada final, sin ediciones concurrentes y con un worker, terminó completa.

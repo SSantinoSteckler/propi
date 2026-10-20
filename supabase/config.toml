@@ -1,0 +1,22 @@
+project_id = "propi"
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+[db]
+port = 54322
+major_version = 15
+[db.seed]
+enabled = true
+sql_paths = ["./seed.sql"]
+[studio]
+enabled = true
+port = 54323
+[auth]
+enabled = true
+site_url = "http://localhost:3100"
+additional_redirect_urls = ["http://localhost:3100/onboarding", "http://localhost:3100/actualizar-clave", "http://localhost:3100/login/callback"]
+[auth.email]
+enable_signup = true
+enable_confirmations = false

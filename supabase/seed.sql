@@ -1,0 +1,21 @@
+-- LOCAL DEVELOPMENT ONLY. Fictional profiles, listings and consented demo reviews.
+-- These users cannot sign in: no password/identity is created. Use registration for E2E.
+insert into auth.users(id,instance_id,aud,role,email,email_confirmed_at,created_at,updated_at,raw_app_meta_data,raw_user_meta_data) values
+ ('11111111-1111-4111-8111-111111111111','00000000-0000-0000-0000-000000000000','authenticated','authenticated','agente1@example.invalid',now(),now(),now(),'{"provider":"email","providers":["email"]}','{"demo":true}'),
+ ('22222222-2222-4222-8222-222222222222','00000000-0000-0000-0000-000000000000','authenticated','authenticated','agente2@example.invalid',now(),now(),now(),'{"provider":"email","providers":["email"]}','{"demo":true}');
+update public.profiles set first_name='Martina (demo)',last_name='González',username='martina-demo',bio='PERFIL FICTICIO DE DESARROLLO. Las propiedades y testimonios son ejemplos, sin oferta comercial.',city='CABA',province='Buenos Aires',whatsapp='5491100000000',agency='Inmobiliaria ficticia · DEMO',onboarding_step=4 where id='11111111-1111-4111-8111-111111111111';
+update public.profiles set first_name='Tomás (demo)',last_name='Pérez',username='tomas-demo',bio='PERFIL FICTICIO DE DESARROLLO. Sin actividad comercial ni clientes reales.',city='La Plata',province='Buenos Aires',whatsapp='5491100000000',agency='Estudio ficticio · DEMO',onboarding_step=4 where id='22222222-2222-4222-8222-222222222222';
+-- Profiles intentionally unpublished: demo phone numbers must never be contacted.
+insert into public.properties(id,owner_id,slug,title,description,type,operation,price,currency,province,city,neighborhood,total_area,covered_area,rooms,bedrooms,bathrooms,status)
+select ('33333333-3333-4333-8333-'||lpad(i::text,12,'0'))::uuid,case when i<=4 then '11111111-1111-4111-8111-111111111111'::uuid else '22222222-2222-4222-8222-222222222222'::uuid end,'propiedad-demo-'||i,
+ '[DEMO] '||(array['Departamento luminoso','Casa con jardín','Departamento con balcón','PH con patio','Casa familiar','Oficina céntrica','Terreno de ejemplo','Departamento vendido'])[i],
+ 'PROPIEDAD FICTICIA DE DESARROLLO. Ejemplo de descripción, sin oferta comercial ni dirección real.',(array['departamento','casa','departamento','PH','casa','oficina','terreno','departamento'])[i],case when i in (3,6) then 'alquiler' else 'venta' end,case when i in (3,6) then 750000 else 150000+i*10000 end,case when i in (3,6) then 'ARS' else 'USD' end,'Buenos Aires',case when i<=4 then 'CABA' else 'La Plata' end,'Barrio de ejemplo',80+i*5,60,3,2,1,case when i=8 then 'vendida' else 'disponible' end
+from generate_series(1,8) i;
+insert into public.collections(id,owner_id,name,description) values
+ ('44444444-4444-4444-8444-444444444441','11111111-1111-4111-8111-111111111111','[DEMO] Espacios con luz','Colección ficticia. No contiene datos de compradores.'),
+ ('44444444-4444-4444-8444-444444444442','22222222-2222-4222-8222-222222222222','[DEMO] Una nueva etapa','Colección ficticia de desarrollo.');
+insert into public.collection_properties(collection_id,property_id,owner_id,position) select case when i<=4 then '44444444-4444-4444-8444-444444444441'::uuid else '44444444-4444-4444-8444-444444444442'::uuid end,('33333333-3333-4333-8333-'||lpad(i::text,12,'0'))::uuid,case when i<=4 then '11111111-1111-4111-8111-111111111111'::uuid else '22222222-2222-4222-8222-222222222222'::uuid end,i from generate_series(1,8) i;
+insert into public.review_requests(id,owner_id,consumed_at) values('55555555-5555-4555-8555-555555555551','11111111-1111-4111-8111-111111111111',now()),('55555555-5555-4555-8555-555555555552','22222222-2222-4222-8222-222222222222',now());
+insert into public.reviews(owner_id,request_id,display_name,rating,body,consent_at) values
+ ('11111111-1111-4111-8111-111111111111','55555555-5555-4555-8555-555555555551','Cliente ficticio A (DEMO)',5,'RESEÑA FICTICIA: este texto demuestra la presentación de una experiencia. No corresponde a un cliente ni operación real.',now()),
+ ('22222222-2222-4222-8222-222222222222','55555555-5555-4555-8555-555555555552','Cliente ficticio B (DEMO)',3,'RESEÑA FICTICIA: ejemplo de una calificación de tres estrellas. No es una experiencia real ni verificada.',now());

@@ -1,0 +1,75 @@
+# Dependencias y cachés de paquetes
+node_modules/
+.npm/
+.pnpm-store/
+
+# Variables de entorno y secretos (el ejemplo sí se versiona)
+.env*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+.aws/
+.ssh/
+.netrc
+
+# Compilación y cachés de Next.js / TypeScript
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+.turbo/
+.cache/
+
+# Configuración local de despliegue
+.vercel/
+.supabase/
+supabase/.temp/
+supabase/.branches/
+
+# Pruebas, cobertura y reportes generados
+playwright-report/
+test-results/
+blob-report/
+playwright/.cache/
+coverage/
+.nyc_output/
+
+# Logs, volcados de procesos y archivos temporales
+*.log
+*.pid
+*.pid.lock
+*.stackdump
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# Bases locales y respaldos (conservar las migraciones y seeds .sql)
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite3-journal
+*.dump
+*.sql.gz
+*.bak
+
+# Preferencias locales de editores
+.idea/
+.vscode/
+*.suo
+*.user
+*.sln.docstates
+*.code-workspace
+.history/
+
+# Archivos del sistema operativo
+.DS_Store
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/

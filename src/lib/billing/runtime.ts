@@ -1,0 +1,206 @@
+import "server-only";
+import { adminDb } from "../supabase/admin";
+import { mp, ProviderError, withProviderBudget } from "../mercadopago/client";
+import { SITE_URL } from "../config";
+import catalog from "./catalog.json";
+import { reservedCreation } from "./creation";
+import { BillingError, checkoutUrl, nextBillingMonth, requireCondition, validatePlan, validateSubscription, verifyInvoice } from "./domain";
+import type { Agreement, BillingStatus, Entitlements, MPInvoice, MPPayment, MPPlan, MPSubscription, VerifiedPayment } from "./types";
+
+type Db = ReturnType<typeof adminDb>;
+function checked<T>(result: { data: T; error: unknown }): T {
+  if (result.error) throw new BillingError("DATABASE_UNAVAILABLE", 503);
+  return result.data;
+}
+export function billingAvailable() {
+  let publicOrigin = false;
+  try { const url = new URL(SITE_URL); publicOrigin = url.origin === SITE_URL && url.protocol === "https:" && !["localhost","127.0.0.1","[::1]"].includes(url.hostname); } catch { /* Invalid configuration disables checkout. */ }
+  return Boolean(process.env.MERCADOPAGO_ACCESS_TOKEN && process.env.MERCADOPAGO_WEBHOOK_SECRET && process.env.MERCADOPAGO_PRO_PLAN_ID && process.env.SUPABASE_SECRET_KEY && publicOrigin);
+}
+export async function getUserEntitlements(owner: string, db = adminDb()): Promise<Entitlements> {
+  return checked(await db.rpc("billing_get_entitlements", { p_owner: owner })) as Entitlements;
+}
+export async function rateLimit(db: Db, key: string, limit: number, seconds: number) {
+  if (!checked(await db.rpc("billing_rate_limit", { p_key: key, p_limit: limit, p_seconds: seconds }))) throw new BillingError("RATE_LIMIT", 429);
+}
+export async function withLock<T>(db: Db, key: string, work: (token: string) => Promise<T>): Promise<T> {
+ return withProviderBudget(async () => {
+  const token = checked(await db.rpc("billing_acquire_lock", { p_key: key })) as string | null;
+  if (!token) throw new BillingError("IN_PROGRESS", 409);
+  try { return await work(token); }
+  finally { await db.rpc("billing_release_lock", { p_key: key, p_token: token }); }
+ });
+}
+async function sellerId() {
+  const user = await mp<{ id: number; site_id: string }>("/users/me");
+  requireCondition(user.id && user.site_id === "MLA", "INVALID_SELLER");
+  return String(user.id);
+}
+async function currentAgreement(db: Db, owner: string) {
+  return checked(await db.from("billing_agreements").select("*").eq("owner_id", owner).order("created_at", { ascending: false }).limit(1).maybeSingle()) as Agreement | null;
+}
+async function remoteFor(a: Agreement, db: Db) {
+  if (a.provider_subscription_id) return mp<MPSubscription>(`/preapproval/${encodeURIComponent(a.provider_subscription_id)}`);
+  // external_reference is not a documented search filter. Walk the seller's
+  // paginated list with a persistent cursor and compare the exact opaque reference.
+  const offset = a.recovery_offset || 0;
+  const found = await mp<{ results: MPSubscription[]; paging: { total: number } }>(`/preapproval/search?limit=100&offset=${offset}`);
+  const exact = (found.results || []).filter((s) => s.external_reference === a.external_reference);
+  requireCondition(exact.length <= 1, "DUPLICATE_PROVIDER_SUBSCRIPTIONS");
+  if (exact[0]) return mp<MPSubscription>(`/preapproval/${encodeURIComponent(exact[0].id)}`);
+  checked(await db.from("billing_agreements").update({ recovery_offset: offset + found.results.length < found.paging.total ? offset + found.results.length : 0 }).eq("id", a.id));
+  return null;
+}
+async function applyRemote(db: Db, a: Agreement, s: MPSubscription, token: string, seller: string) {
+  validateSubscription(s, a, seller);
+  const payments: VerifiedPayment[] = [];
+  let complete = false, validations = 0;
+  for (let offset = 0; offset < 500; offset += 100) {
+    const page = await mp<{ paging: { total: number }; results: MPInvoice[] }>(`/authorized_payments/search?preapproval_id=${encodeURIComponent(s.id)}&limit=100&offset=${offset}`);
+    requireCondition(Array.isArray(page.results), "INVALID_INVOICE_RESPONSE");
+    for (const invoice of page.results) {
+      let payment: MPPayment | null = null;
+      // Only recent/current service cycles need a fresh Payments API lookup.
+      // Older invoices remain in the ledger but cannot grant access unverified.
+      const relevant = invoice.debit_date && Date.parse(nextBillingMonth(invoice.debit_date)) > Date.now() - 86400000;
+      if (invoice.payment?.id && relevant) {
+        if (++validations > 8) throw new BillingError("SYNC_BATCH_LIMIT", 503);
+        payment = await mp<MPPayment>(`/v1/payments/${encodeURIComponent(String(invoice.payment.id))}`);
+      }
+      payments.push(verifyInvoice(invoice, payment, s, a, seller));
+    }
+    if (offset + page.results.length >= (page.paging?.total ?? page.results.length)) { complete = true; break; }
+  }
+  requireCondition(complete, "SYNC_PAGINATION_LIMIT");
+  checked(await db.rpc("billing_apply_sync", { p_id: a.id, p_token: token,
+    p_snapshot: { id: s.id, external_reference: s.external_reference, status: s.status, updated_at: s.last_modified,
+      next_payment_date: s.next_payment_date || null, checkout_url: s.init_point ? checkoutUrl(s.init_point) : null }, p_payments: payments }));
+}
+async function markSyncError(db: Db, a: Agreement) {
+  await db.from("billing_agreements").update({ sync_error: true, updated_at: new Date().toISOString(), reconcile_after: new Date(Date.now() + 300000).toISOString() }).eq("id", a.id);
+}
+export async function synchronize(owner: string, db = adminDb(), agreementId?: string) {
+  return withLock(db, `billing:${owner}`, async (token) => {
+    const a = agreementId
+      ? checked(await db.from("billing_agreements").select("*").eq("id", agreementId).eq("owner_id", owner).single()) as Agreement
+      : await currentAgreement(db, owner);
+    if (!a || a.creation_state === "failed") return;
+    try {
+      const seller = await sellerId(), s = await remoteFor(a, db);
+      if (!s) { await markSyncError(db, a); return; }
+      await applyRemote(db, a, s, token, seller);
+    } catch (error) { await markSyncError(db, a); throw error; }
+  });
+}
+export async function subscribe(owner: string, payerEmail: string, db = adminDb()) {
+  if (!billingAvailable()) throw new BillingError("BILLING_NOT_CONFIGURED", 503);
+  return withLock(db, `billing:${owner}`, async (token) => {
+    await rateLimit(db, `checkout:${owner}`, 5, 600);
+    const entitlement = await getUserEntitlements(owner, db);
+    if (entitlement.premium) throw new BillingError("ALREADY_PREMIUM");
+    const seller = await sellerId();
+    let a = await currentAgreement(db, owner);
+    if (a && a.creation_state !== "failed" && !["cancelled","canceled"].includes(a.status)) {
+      // Never repeat an ambiguous POST, even after its lease expires.
+      const remote = await remoteFor(a, db);
+      if (!remote) throw new BillingError("AWAITING_RECONCILIATION");
+      await applyRemote(db, a, remote, token, seller);
+      if (remote.status === "pending") return { checkout_url: checkoutUrl(remote.init_point) };
+      throw new BillingError("EXISTING_SUBSCRIPTION");
+    }
+    const plan = await mp<MPPlan>(`/preapproval_plan/${encodeURIComponent(process.env.MERCADOPAGO_PRO_PLAN_ID!)}`);
+    validatePlan(plan, seller, `${SITE_URL}/dashboard/billing/return`);
+    return reservedCreation({
+     reserve: async () => checked(await db.from("billing_agreements").insert({ owner_id: owner, catalog_plan_id: plan.id,
+      amount: plan.auto_recurring.transaction_amount, currency: plan.auto_recurring.currency_id }).select().single()) as Agreement,
+     create: (a) => mp<MPSubscription>("/preapproval", "POST", {
+        reason: catalog.name, external_reference: a.external_reference, payer_email: payerEmail,
+        auto_recurring: { frequency: 1, frequency_type: "months", transaction_amount: Number(a.amount), currency_id: a.currency },
+        back_url: `${SITE_URL}/dashboard/billing/return`, status: "pending",
+      }, a.id),
+     persist: async (a, s) => {
+      // Hosted pending checkout is the documented no-card-token alternative.
+      validateSubscription(s, a, seller);
+      const url = checkoutUrl(s.init_point);
+      checked(await db.rpc("billing_apply_sync", { p_id: a.id, p_token: token,
+        p_snapshot: { id: s.id, external_reference: s.external_reference, status: s.status, updated_at: s.last_modified, checkout_url: url, next_payment_date: null }, p_payments: [] }));
+      return { checkout_url: url };
+     },
+     failed: async (a, error) => {
+      const definitive = error instanceof ProviderError && [400,401,403,422].includes(error.providerStatus);
+      await db.from("billing_agreements").update({ creation_state: definitive ? "failed" : "uncertain", sync_error: true }).eq("id", a.id).eq("creation_state", "creating");
+     },
+    });
+  });
+}
+export async function cancel(owner: string, db = adminDb()) {
+  return withLock(db, `billing:${owner}`, async (token) => {
+    await rateLimit(db, `cancel:${owner}`, 5, 600);
+    const a = await currentAgreement(db, owner);
+    if (!a) throw new BillingError("NO_SUBSCRIPTION", 404);
+    const seller = await sellerId(), s = await remoteFor(a, db);
+    if (!s) throw new BillingError("AWAITING_RECONCILIATION");
+    validateSubscription(s, a, seller);
+    if (!["cancelled","canceled"].includes(s.status)) {
+      await mp(`/preapproval/${encodeURIComponent(s.id)}`, "PUT", { status: "cancelled" }, `cancel-${a.id}`);
+    }
+    // Re-read canonical state; a successful PUT alone does not grant access.
+    const fresh = await mp<MPSubscription>(`/preapproval/${encodeURIComponent(s.id)}`);
+    await applyRemote(db, a, fresh, token, seller);
+    return { canceled: ["cancelled","canceled"].includes(fresh.status) };
+  });
+}
+export async function status(owner: string, refresh: boolean, db = adminDb()): Promise<BillingStatus> {
+  await rateLimit(db, `status:${owner}`, 60, 60);
+  let a = await currentAgreement(db, owner);
+  if (refresh && a && billingAvailable() && (!a.sync_error || Date.parse(a.reconcile_after) <= Date.now()) && Date.now() - Date.parse(a.last_synced_at || "1970-01-01") > 30000) {
+    try { await synchronize(owner, db); } catch { /* Show persisted state and sync_error. */ }
+    a = await currentAgreement(db, owner);
+  }
+  const payments = checked(await db.from("subscription_payments").select("id,amount,currency,status,paid_at,coverage_end").eq("owner_id", owner).order("created_at", { ascending: false }).limit(50));
+  return { catalog, available: billingAvailable(), entitlements: await getUserEntitlements(owner, db),
+    agreement: a ? { id: a.id, amount: Number(a.amount), currency: a.currency, status: a.status, creation_state: a.creation_state, next_payment_date: a.next_payment_date,
+      last_synced_at: a.last_synced_at, sync_error: a.sync_error } : null, payments: payments || [] };
+}
+
+export async function processEvent(key: string, db = adminDb()) {
+  return withLock(db, `event:${key}`, async () => {
+    const event = checked(await db.from("billing_webhook_events").select("*").eq("event_key", key).single());
+    if (["processed","ignored"].includes(event.processing_status)) return;
+    checked(await db.from("billing_webhook_events").update({ attempts: event.attempts + 1 }).eq("event_key", key));
+    try {
+      let subscriptionId: string | null = null, reference: string | undefined;
+      if (event.event_type === "subscription_preapproval") {
+        const s = await mp<MPSubscription>(`/preapproval/${encodeURIComponent(event.resource_id)}`);
+        subscriptionId = s.id; reference = s.external_reference;
+      } else if (event.event_type === "subscription_authorized_payment") {
+        const invoice = await mp<MPInvoice>(`/authorized_payments/${encodeURIComponent(event.resource_id)}`);
+        subscriptionId = invoice.preapproval_id;
+      } else if (event.event_type === "payment") {
+        const found = await mp<{ results: MPInvoice[] }>(`/authorized_payments/search?payment_id=${encodeURIComponent(event.resource_id)}&limit=20`);
+        const ids = [...new Set(found.results.map((i) => i.preapproval_id))];
+        requireCondition(ids.length <= 1, "AMBIGUOUS_PAYMENT"); subscriptionId = ids[0] || null;
+      }
+      let agreement: Agreement | null = null;
+      if (subscriptionId) agreement = checked(await db.from("billing_agreements").select("*").eq("provider_subscription_id", subscriptionId).maybeSingle()) as Agreement | null;
+      if (!agreement && reference) agreement = checked(await db.from("billing_agreements").select("*").eq("external_reference", reference).maybeSingle()) as Agreement | null;
+      if (agreement) await synchronize(agreement.owner_id, db, agreement.id);
+      else if (subscriptionId && !reference) throw new BillingError("AWAITING_CORRELATION", 503);
+      checked(await db.from("billing_webhook_events").update({ processing_status: agreement ? "processed" : "ignored", processed_at: new Date().toISOString() }).eq("event_key", key));
+    } catch (error) {
+      await db.from("billing_webhook_events").update({ processing_status: "failed", retry_after: new Date(Date.now() + Math.min(3600000, 60000 * 2 ** Math.min(event.attempts, 6))).toISOString() }).eq("event_key", key);
+      throw error;
+    }
+  });
+}
+export async function reconcile() {
+  const db = adminDb(), start = Date.now(); let synced = 0, failed = 0;
+  const events = checked(await db.from("billing_webhook_events").select("event_key").in("processing_status", ["pending","failed"]).lte("retry_after", new Date().toISOString()).order("retry_after").limit(2));
+  for (const event of events || []) { try { await processEvent(event.event_key, db); } catch { failed++; } }
+  const agreements = checked(await db.from("billing_agreements").select("id,owner_id").neq("creation_state","failed").lte("reconcile_after", new Date().toISOString()).order("reconcile_after").limit(10));
+  for (const a of agreements || []) {
+    if (Date.now() - start > 30000) break;
+    try { await synchronize(a.owner_id, db, a.id); synced++; } catch { failed++; }
+  }
+  return { synced, failed };
+}
