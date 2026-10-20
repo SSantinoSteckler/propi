@@ -3,6 +3,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 export function verifyWebhook(signature: string | null, requestId: string | null, resourceId: string | null, secret: string, now = Date.now()) {
   if (!signature || !requestId || !resourceId || signature.length > 512 || requestId.length > 128 || !/^[a-zA-Z0-9_-]{1,128}$/.test(resourceId)) return false;
   const pieces = signature.split(",").map((s) => s.trim().split("="));
+  if (pieces.some((piece) => piece.length !== 2)) return false;
   if (pieces.filter(([k]) => k === "ts").length !== 1 || pieces.filter(([k]) => k === "v1").length !== 1) return false;
   const ts = pieces.find(([k]) => k === "ts")?.[1], digest = pieces.find(([k]) => k === "v1")?.[1];
   if (!ts || !/^(?:\d{10}|\d{13})$/.test(ts) || !digest || !/^[a-fA-F0-9]{64}$/.test(digest)) return false;

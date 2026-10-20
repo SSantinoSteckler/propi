@@ -3,8 +3,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { BillingError } from "../billing/domain";
 
 const deadline = new AsyncLocalStorage<number>();
-export function withProviderBudget<T>(work: () => Promise<T>): Promise<T> {
-  return deadline.getStore() ? work() : deadline.run(Date.now() + 45000, work);
+export function withProviderBudget<T>(work: () => Promise<T>, milliseconds = 45000): Promise<T> {
+  return deadline.getStore() ? work() : deadline.run(Date.now() + Math.min(milliseconds, 45000), work);
 }
 
 export class ProviderError extends BillingError {

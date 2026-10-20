@@ -4,6 +4,7 @@ import { mp, ProviderError, withProviderBudget } from "../mercadopago/client";
 import { SITE_URL } from "../config";
 import catalog from "./catalog.json";
 import { reservedCreation } from "./creation";
+import { processBillingEvent, type BillingEvent } from "./event-processing";
 import { BillingError, checkoutUrl, nextBillingMonth, requireCondition, validatePlan, validateSubscription, verifyInvoice } from "./domain";
 import type { Agreement, BillingStatus, Entitlements, MPInvoice, MPPayment, MPPlan, MPSubscription, VerifiedPayment } from "./types";
 
@@ -164,33 +165,16 @@ export async function status(owner: string, refresh: boolean, db = adminDb()): P
 }
 
 export async function processEvent(key: string, db = adminDb()) {
-  return withLock(db, `event:${key}`, async () => {
-    const event = checked(await db.from("billing_webhook_events").select("*").eq("event_key", key).single());
-    if (["processed","ignored"].includes(event.processing_status)) return;
-    checked(await db.from("billing_webhook_events").update({ attempts: event.attempts + 1 }).eq("event_key", key));
-    try {
-      let subscriptionId: string | null = null, reference: string | undefined;
-      if (event.event_type === "subscription_preapproval") {
-        const s = await mp<MPSubscription>(`/preapproval/${encodeURIComponent(event.resource_id)}`);
-        subscriptionId = s.id; reference = s.external_reference;
-      } else if (event.event_type === "subscription_authorized_payment") {
-        const invoice = await mp<MPInvoice>(`/authorized_payments/${encodeURIComponent(event.resource_id)}`);
-        subscriptionId = invoice.preapproval_id;
-      } else if (event.event_type === "payment") {
-        const found = await mp<{ results: MPInvoice[] }>(`/authorized_payments/search?payment_id=${encodeURIComponent(event.resource_id)}&limit=20`);
-        const ids = [...new Set(found.results.map((i) => i.preapproval_id))];
-        requireCondition(ids.length <= 1, "AMBIGUOUS_PAYMENT"); subscriptionId = ids[0] || null;
-      }
-      let agreement: Agreement | null = null;
-      if (subscriptionId) agreement = checked(await db.from("billing_agreements").select("*").eq("provider_subscription_id", subscriptionId).maybeSingle()) as Agreement | null;
-      if (!agreement && reference) agreement = checked(await db.from("billing_agreements").select("*").eq("external_reference", reference).maybeSingle()) as Agreement | null;
-      if (agreement) await synchronize(agreement.owner_id, db, agreement.id);
-      else if (subscriptionId && !reference) throw new BillingError("AWAITING_CORRELATION", 503);
-      checked(await db.from("billing_webhook_events").update({ processing_status: agreement ? "processed" : "ignored", processed_at: new Date().toISOString() }).eq("event_key", key));
-    } catch (error) {
-      await db.from("billing_webhook_events").update({ processing_status: "failed", retry_after: new Date(Date.now() + Math.min(3600000, 60000 * 2 ** Math.min(event.attempts, 6))).toISOString() }).eq("event_key", key);
-      throw error;
-    }
+  return processBillingEvent(key, {
+    lock: (lockKey, work) => withLock(db, lockKey, work),
+    load: async (eventKey) => checked(await db.from("billing_webhook_events").select("*").eq("event_key", eventKey).single()) as BillingEvent,
+    update: async (eventKey, values) => { checked(await db.from("billing_webhook_events").update(values).eq("event_key", eventKey)); },
+    subscription: (id) => mp<MPSubscription>(`/preapproval/${encodeURIComponent(id)}`),
+    invoice: (id) => mp<MPInvoice>(`/authorized_payments/${encodeURIComponent(id)}`),
+    invoicesForPayment: async (id) => (await mp<{ results: MPInvoice[] }>(`/authorized_payments/search?payment_id=${encodeURIComponent(id)}&limit=20`)).results,
+    findBySubscription: async (id) => checked(await db.from("billing_agreements").select("*").eq("provider_subscription_id", id).maybeSingle()) as Agreement | null,
+    findByReference: async (reference) => checked(await db.from("billing_agreements").select("*").eq("external_reference", reference).maybeSingle()) as Agreement | null,
+    synchronize: async (agreement) => { await synchronize(agreement.owner_id, db, agreement.id); },
   });
 }
 export async function reconcile() {

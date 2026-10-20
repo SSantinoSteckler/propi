@@ -1,5 +1,13 @@
 ﻿import assert from 'node:assert/strict';
 export async function billingTests({pg, A, B, user, admin, scalar, fails, test, insert}) {
+ await test('billing: SQL de diagnóstico comprueba objetos y permisos sin modificar datos',async()=>{
+  const {readFile}=await import('node:fs/promises');
+  const before=await scalar('select count(*)::int from billing_plan_registry');
+  const result=await pg.query(await readFile('supabase/diagnostics/billing.sql','utf8'));
+  for(const [name,value] of Object.entries(result.rows[0])) assert.equal(value,true,name);
+  assert.equal(await scalar('select count(*)::int from billing_plan_registry'),before);
+  assert.equal(await scalar('select count(*)::int from private.billing_locks'),0);
+ });
  const json = (x) => `'${JSON.stringify(x).replaceAll("'", "''")}'::jsonb`;
  async function setup(owner=A) {
   const a = (await pg.query(`insert into billing_agreements(owner_id,catalog_plan_id,amount,currency) values('${owner}','catalog-plan',14900,'ARS') returning *`)).rows[0];
@@ -10,6 +18,19 @@ export async function billingTests({pg, A, B, user, admin, scalar, fails, test, 
   return {a,token,snapshot,payment,apply};
  }
  const plan = (owner=A) => scalar(`select private.effective_plan('${owner}')`);
+ await test('billing: bandeja de webhooks deduplica sin reiniciar eventos procesados',async()=>{
+  const notification="insert into billing_webhook_events(event_key,event_type,resource_id) values('request-resource','subscription_preapproval','sub-id') on conflict(event_key) do nothing";
+  await pg.exec(notification);
+  await pg.exec("update billing_webhook_events set processing_status='processed',attempts=1 where event_key='request-resource'");
+  await pg.exec(notification);
+  assert.equal(await scalar('select count(*)::int from billing_webhook_events'),1);
+  assert.equal(await scalar('select processing_status from billing_webhook_events'),'processed');
+  assert.equal(await scalar('select attempts from billing_webhook_events'),1);
+ });
+ await test('billing: pago verificado no habilita Premium con suscripción todavía pendiente',async()=>{
+  const x=await setup();await x.apply([x.payment],{...x.snapshot,status:'pending'});assert.equal(await plan(),'free');
+  await x.apply([x.payment]);assert.equal(await plan(),'pro');
+ });
  await test('billing: autorización y pago pendiente/rechazado no habilitan Premium',async()=>{
   const x=await setup(); await x.apply(); assert.equal(await plan(),'free');
   await x.apply([{...x.payment,status:'pending',verified:false}]); assert.equal(await plan(),'free');

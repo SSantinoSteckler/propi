@@ -14,9 +14,30 @@ globalThis.fetch = async (input, options = {}) => {
  };
  state.requests = (state.requests || 0) + 1;
  if (url.origin === 'https://billing-test.supabase.co') {
+  if (state.captureTransport) state.transport = {method,path:url.pathname,userAgent:new Headers(options.headers).get('user-agent')};
+  if (state.captureAuth) {
+   const headers = new Headers(options.headers);
+   const key = process.env.SUPABASE_SECRET_KEY;
+   (state.requestAuthentication ||= []).push({apiKeyMatchesConfigured:headers.get('apikey') === key,authorizationHeaderPresent:headers.has('authorization'),authorizationMatchesConfiguredBearer:headers.get('authorization') === `Bearer ${key}`});
+  }
   if (url.pathname === '/rest/v1/rpc/billing_acquire_lock') return respond('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
   if (url.pathname === '/rest/v1/rpc/billing_release_lock') return respond(null);
   if (url.pathname === '/rest/v1/billing_plan_registry') {
+   if (state.scenario === 'db-browser') return respond({message:'Forbidden use of secret API key in browser'},401);
+   if (state.scenario === 'db-invalid-api-key') return respond({message:`Invalid API key: ${process.env.SUPABASE_SECRET_KEY}`},401);
+   if (state.scenario === 'db-unknown-401') return respond({message:`private-provider-detail ${process.env.SUPABASE_SECRET_KEY}`},401);
+   const errors = {
+    'db-table-missing':['PGRST205',404], 'db-function-missing':['PGRST202',404],
+    'db-permissions':['42501',403], 'db-credentials':['PGRST301',401], 'db-other':['23505',409],
+   };
+   if (method === 'GET' && state.scenario === 'db-connection') {
+    await writeFile(file,JSON.stringify(state));
+    throw Object.assign(new Error('private-provider-detail'),{cause:{code:'EACCES'}});
+   }
+   if (method === 'GET' && errors[state.scenario]) {
+    const [code,status] = errors[state.scenario];
+    return respond({code,message:'private-provider-detail test-secret-not-real'},status);
+   }
    if (method === 'GET') return respond(state.registry ? [state.registry] : []);
    state.registryWrites = (state.registryWrites || 0) + 1;
    if (method === 'POST') { state.registry ||= {key:'premium',provider_plan_id:null,creation_started:false}; return respond(null, 204); }
@@ -28,7 +49,7 @@ globalThis.fetch = async (input, options = {}) => {
   }
  }
  if (url.origin === 'https://api.mercadopago.com') {
-  if (url.pathname === '/users/me' && method === 'GET') return respond({id:101,site_id:'MLA'});
+  if (url.pathname === '/users/me' && method === 'GET') return respond({id:101,site_id:'MLA',tags:state.scenario === 'real-account' ? [] : ['test_user']});
   if (url.pathname === '/preapproval_plan' && method === 'POST') {
    state.creates = (state.creates || 0) + 1;
    state.plan = {...body,id:'test-plan-123',collector_id:101,status:'active'};
