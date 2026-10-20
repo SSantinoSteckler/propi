@@ -4,6 +4,7 @@ import { handleWebhook, type WebhookNotice } from '../src/lib/mercadopago/webhoo
 import { processBillingEvent, type BillingEvent, type EventDependencies } from '../src/lib/billing/event-processing';
 import { createAdminFetch } from '../src/lib/supabase/admin-transport';
 import { BillingError } from '../src/lib/billing/domain';
+import { billingScope, assertAgreementScope } from '../src/lib/billing/scope';
 import type { Agreement, MPInvoice, MPSubscription } from '../src/lib/billing/types';
 const secret='isolated-webhook-secret-not-real';
 const agreement={id:'local-agreement',owner_id:'owner-from-database',external_reference:'opaque-reference',provider_subscription_id:'subscription-123'} as Agreement;
@@ -22,6 +23,7 @@ function harness() {
   load:async key=>({...events.get(key)!}),
   update:async(key,values)=>{Object.assign(events.get(key)!,values);},
   subscription:async()=>{subscriptionReads++;return subscription;},invoice:async()=>{invoiceReads++;return invoice;},
+  validateSubscription:()=>{},
   invoicesForPayment:async()=>[invoice],findBySubscription:async()=>agreement,findByReference:async()=>agreement,
   synchronize:async(a)=>{syncCount++;owners.push(a.owner_id);},
  };
@@ -81,4 +83,25 @@ test('sb_secret se envía al REST de Supabase sin Bearer y con User-Agent de ser
  const fetcher=createAdminFetch('https://database.supabase.co','sb_secret_fixture',send);
  await fetcher('https://database.supabase.co/rest/v1/billing_webhook_events',{headers:{Authorization:'Bearer sb_secret_fixture'}});
  await expect(fetcher('https://other.example/rest/v1/events')).rejects.toThrow('INVALID_ADMIN_DESTINATION');expect(calls).toBe(1);
+});
+
+test('webhook ficticio firmado no puede sincronizar una cuenta real aunque la referencia coincida',async()=>{
+ const h=harness();let authorizedWrites=0;
+ const scope=billingScope({MERCADOPAGO_ENVIRONMENT:'test',MERCADOPAGO_SELLER_ID:'3779671542',BILLING_TEST_USER_ID:'99999999-9999-4999-8999-999999999999'});
+ h.dependencies.subscription=async()=>({...subscription,collector_id:3779671542});
+ h.dependencies.validateSubscription=s=>{if(String(s.collector_id)!==scope.sellerId)throw new BillingError('INVALID_SELLER',502);};
+ h.dependencies.synchronize=async a=>{assertAgreementScope(scope,a);authorizedWrites++;};
+ // A matching opaque reference must never override the stored real owner.
+ expect((await handleWebhook(request(),secret,h.deliver)).status).toBe(403);
+ expect(authorizedWrites).toBe(0);
+ expect([...h.events.values()][0].processing_status).toBe('failed');
+});
+
+test('webhook firmado de otro vendedor se rechaza antes de correlacionar o sincronizar',async()=>{
+ const h=harness();let lookups=0;
+ h.dependencies.subscription=async()=>({...subscription,collector_id:101});
+ h.dependencies.validateSubscription=s=>{if(String(s.collector_id)!=='3779671542')throw new BillingError('INVALID_SELLER',502);};
+ h.dependencies.findBySubscription=async()=>{lookups++;return agreement;};
+ expect((await handleWebhook(request(),secret,h.deliver)).status).toBe(502);
+ expect(lookups).toBe(0);expect(h.counts().syncCount).toBe(0);
 });

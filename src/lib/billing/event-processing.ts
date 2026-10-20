@@ -7,6 +7,7 @@ export type EventDependencies = {
   load: (key: string) => Promise<BillingEvent>;
   update: (key: string, values: Record<string, unknown>) => Promise<void>;
   subscription: (id: string) => Promise<MPSubscription>;
+  validateSubscription: (subscription: MPSubscription) => void;
   invoice: (id: string) => Promise<MPInvoice>;
   invoicesForPayment: (id: string) => Promise<MPInvoice[]>;
   findBySubscription: (id: string) => Promise<Agreement | null>;
@@ -27,6 +28,7 @@ export async function processBillingEvent(key: string, dependencies: EventDepend
       if (event.event_type === "subscription_preapproval") {
         const subscription = await d.subscription(event.resource_id);
         requireCondition(subscription.id === event.resource_id, "SUBSCRIPTION_MISMATCH");
+        d.validateSubscription(subscription);
         subscriptionId = subscription.id; reference = subscription.external_reference;
       } else if (event.event_type === "subscription_authorized_payment") {
         const invoice = await d.invoice(event.resource_id);
@@ -46,6 +48,7 @@ export async function processBillingEvent(key: string, dependencies: EventDepend
       if (!agreement && subscriptionId && !reference) {
         const subscription = await d.subscription(subscriptionId);
         requireCondition(subscription.id === subscriptionId, "SUBSCRIPTION_MISMATCH");
+        d.validateSubscription(subscription);
         reference = subscription.external_reference;
       }
       if (!agreement && reference) agreement = await d.findByReference(reference);

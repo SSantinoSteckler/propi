@@ -10,9 +10,9 @@ export async function billingTests({pg, A, B, user, admin, scalar, fails, test, 
  });
  const json = (x) => `'${JSON.stringify(x).replaceAll("'", "''")}'::jsonb`;
  async function setup(owner=A) {
-  const a = (await pg.query(`insert into billing_agreements(owner_id,catalog_plan_id,amount,currency) values('${owner}','catalog-plan',14900,'ARS') returning *`)).rows[0];
+  const a = (await pg.query(`insert into billing_agreements(owner_id,catalog_plan_id,amount,currency,seller_id,environment) values('${owner}','catalog-plan',14900,'ARS','101','production') returning *`)).rows[0];
   const token = await scalar(`select billing_acquire_lock('billing:${owner}')`);
-  const snapshot = {id:`mp-${owner}`,external_reference:a.external_reference,status:'authorized',updated_at:'2026-10-19T10:00:00Z',next_payment_date:null};
+  const snapshot = {environment:'production',seller_id:'101',id:`mp-${owner}`,external_reference:a.external_reference,status:'authorized',updated_at:'2026-10-19T10:00:00Z',next_payment_date:null};
   const payment = {invoice_id:`invoice-${owner}`,payment_id:`payment-${owner}`,preapproval_id:snapshot.id,amount:14900,currency:'ARS',status:'approved',invoice_status:'processed',verified:true,paid_at:new Date().toISOString(),coverage_start:new Date(Date.now()-86400000).toISOString(),coverage_end:new Date(Date.now()+86400000).toISOString(),updated_at:'2026-10-19T10:00:00Z'};
   const apply = async (payments=[],s=snapshot,t=token) => scalar(`select billing_apply_sync('${a.id}','${t}',${json(s)},${json(payments)})`);
   return {a,token,snapshot,payment,apply};
@@ -74,9 +74,9 @@ export async function billingTests({pg, A, B, user, admin, scalar, fails, test, 
  });
  await test('billing: reserva única impide contrataciones duplicadas y conserva intentos inciertos',async()=>{
   const x=await setup();
-  await fails(`insert into billing_agreements(owner_id,catalog_plan_id,amount,currency) values('${A}','plan',14900,'ARS')`,/unique/i);
+  await fails(`insert into billing_agreements(owner_id,catalog_plan_id,amount,currency,seller_id,environment) values('${A}','plan',14900,'ARS','101','production')`,/unique/i);
   await pg.exec(`update billing_agreements set creation_state='uncertain' where id='${x.a.id}'`);
-  await fails(`insert into billing_agreements(owner_id,catalog_plan_id,amount,currency) values('${A}','plan',14900,'ARS')`,/unique/i);
+  await fails(`insert into billing_agreements(owner_id,catalog_plan_id,amount,currency,seller_id,environment) values('${A}','plan',14900,'ARS','101','production')`,/unique/i);
  });
  await test('billing: RLS aísla facturación y deniega cambios de plan y eventos',async()=>{
   const x=await setup(); await x.apply([x.payment]); const y=await setup(B); await y.apply([y.payment]);

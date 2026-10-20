@@ -14,7 +14,7 @@ Fuentes oficiales: [suscripciones](https://www.mercadopago.com.ar/developers/es/
 
 ## Configuración por entorno
 
-Copiar nombres desde `.env.example`, sin subir `.env.local`. No enviar secretos por chat. Configurarlos en variables privadas de Vercel y reiniciar/recompilar después de cambios:
+Usar los nombres de esta tabla, sin subir `.env.local`. No enviar secretos por chat. Configurarlos en variables privadas de Vercel y reiniciar/recompilar después de cambios:
 
 | Variable | Uso |
 | --- | --- |
@@ -25,16 +25,25 @@ Copiar nombres desde `.env.example`, sin subir `.env.local`. No enviar secretos 
 | `MERCADOPAGO_ACCESS_TOKEN` | Access Token privado del vendedor argentino correspondiente al entorno |
 | `MERCADOPAGO_WEBHOOK_SECRET` | Firma secreta de Webhooks de la aplicación de Mercado Pago |
 | `MERCADOPAGO_PRO_PLAN_ID` | ID del plan previamente creado/registrado |
+| `MERCADOPAGO_ENVIRONMENT` | `production` por defecto; `test` sólo en Next local |
+| `MERCADOPAGO_SELLER_ID` | ID explícito del vendedor; el ficticio 3779671542 está prohibido en producción |
+| `BILLING_TEST_USER_ID` | Sólo local: UUID también designado en la tabla administrativa privada |
 | `CRON_SECRET` | Secreto aleatorio independiente de al menos 32 caracteres |
 
-- **Development:** el producto normal continúa en `http://localhost:3100` sin configurar `NEXT_PUBLIC_SITE_URL` y con contratación deshabilitada. Para probar pagos usar una instalación HTTPS pública de prueba o túnel HTTPS accesible al proveedor y al navegador; no usar una IP local. Su URL debe coincidir con el plan, retorno y orígenes de la app. No mezclar entornos en una misma base.
-- **Preview:** proyecto Supabase y vendedor de prueba aislados, dominio de preview estable. No copiar secretos de producción indiscriminadamente a previews de PR. El dominio aleatorio de cada despliegue no sirve como URL estable de un plan.
+- **Development:** el producto normal continúa en `http://localhost:3100` sin configurar `NEXT_PUBLIC_SITE_URL` y con contratación deshabilitada. Para la única prueba con base compartida seguir [la guía local](./MERCADOPAGO-PRUEBA-LOCAL.md): túnel HTTPS, usuario designado y vendedor fijo. El retorno de ese checkout usa el túnel sin modificar el plan ficticio existente.
+- **Preview:** no usarlo para esta prueba; el modo ficticio se rechaza en todos los despliegues Vercel.
 - **Production:** dominio HTTPS definitivo, base de producción, credenciales del vendedor real, plan compatible y webhook de esa aplicación. Las variables `MERCADOPAGO_*`, `SUPABASE_SECRET_KEY` y `CRON_SECRET` nunca llevan prefijo `NEXT_PUBLIC_`.
 - Registrar también los orígenes/retornos de Supabase Auth para ese dominio. Se conserva el sistema de sesión existente; los endpoints verifican el JWT Bearer con `auth.getUser()` en Supabase, no con datos del cliente.
 
 ## Migración
 
 Si las primeras tres migraciones ya están aplicadas, ejecutar **solamente** `supabase/migrations/202610200001_billing.sql` una vez, mediante el SQL Editor de Supabase o `supabase db push` con el historial correctamente vinculado. No repetir las migraciones anteriores ni ejecutar `seed.sql` en producción. Un proyecto nuevo aplica todas las migraciones en orden.
+
+Para los controles actuales también se requiere `202610200002_billing_isolation.sql`,
+previa revisión y autorización. Si facturación ya está instalada, aplicar sólo
+esta última siguiendo [la transición compatible](./MERCADOPAGO-TRANSICION.md).
+Expand conserva la RPC antigua y separa las pruebas en tablas nuevas del mismo
+Supabase; el endurecimiento de `supabase/deferred/` no se ejecuta en esta fase.
 
 No se alteran las columnas de `subscriptions` existentes: se agrega un libro de acuerdos/cobros separado, se extienden las funciones de autorización y se conserva compatibilidad con Pro otorgado administrativamente antes de esta integración (`provider` distinto de `mercadopago`). No otorgar Pro manualmente a acuerdos de Mercado Pago modificando la tabla: el acceso real proviene de las evidencias de pago.
 
@@ -243,3 +252,13 @@ No hay credenciales inventadas ni activación ficticia. Hasta completar esta lis
 - El comando administrativo se comprobó con `--help` y validación sintáctica; no se ejecutó `--create` ni se contactó a un vendedor para crear planes.
 
 En la verificación inicial faltaban las variables de Mercado Pago, cron y URL pública. En la revisión posterior del script administrativo se confirmó, sin mostrar su valor ni enviarlo al proveedor, que `MERCADOPAGO_ACCESS_TOKEN` ya está declarado y cargado desde `.env.local`. La vista previa indicó que falta `NEXT_PUBLIC_SITE_URL` para preparar la creación del plan; todavía no se ejecutó esa creación. Las cuatro pruebas adicionales del comando administrativo y `npm run typecheck` pasaron. La migración remota, configuración del proveedor y pruebas integradas siguen pendientes. Una pasada previa del navegador sufrió timeouts durante la recompilación del servidor de desarrollo; la pasada final, sin ediciones concurrentes y con un worker, terminó completa.
+# Prueba local con base compartida
+
+Antes de probar con el Supabase existente, seguir
+[MERCADOPAGO-PRUEBA-LOCAL.md](./MERCADOPAGO-PRUEBA-LOCAL.md).
+La configuración nueva exige `MERCADOPAGO_SELLER_ID`; sólo permite el vendedor
+ficticio 3779671542 en modo local `MERCADOPAGO_ENVIRONMENT=test`, para un único
+`BILLING_TEST_USER_ID` también designado por SQL administrativo. En Vercel se
+rechaza ese modo. El cron nuevo consulta producción y legacy; las tablas ficticias
+están separadas y tampoco son visibles para las consultas del cron anterior.
+No ejecutar la migración de aislamiento remota sin revisión y autorización.

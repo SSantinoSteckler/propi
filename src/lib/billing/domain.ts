@@ -13,9 +13,13 @@ export function checkoutUrl(value: string | undefined) {
   requireCondition(url.protocol === "https:" && url.hostname === "www.mercadopago.com.ar" && url.pathname.startsWith("/subscriptions/checkout") && !url.username && !url.password && !url.port, "INVALID_CHECKOUT");
   return url.href;
 }
-export function validatePlan(plan: MPPlan, seller: string, returnUrl: string) {
+export function validatePlan(plan: MPPlan, seller: string, returnUrl: string, localTest = false) {
   const r = plan.auto_recurring;
-  requireCondition(String(plan.collector_id) === seller && plan.status === "active" && plan.reason === catalog.name && plan.back_url === returnUrl, "PLAN_MISMATCH");
+  // The catalog plan's URL is not used by our no-card-token checkout. Only the
+  // pinned fictitious seller may reuse that catalog with a different local return.
+  let safeCatalogReturn = false;
+  try { const u = new URL(plan.back_url); safeCatalogReturn = u.protocol === "https:" && !u.username && !u.password && u.pathname === "/dashboard/billing/return" && !u.search && !u.hash; } catch { /* Invalid catalog. */ }
+  requireCondition(String(plan.collector_id) === seller && plan.status === "active" && plan.reason === catalog.name && (plan.back_url === returnUrl || (localTest && seller === "3779671542" && safeCatalogReturn)), "PLAN_MISMATCH");
   requireCondition(r && Number(r.transaction_amount) === catalog.amount && r.currency_id === catalog.currency && r.frequency === 1 && r.frequency_type === "months" && !r.free_trial && !r.repetitions && !r.end_date, "PLAN_MISMATCH");
 }
 export function validateSubscription(s: MPSubscription, a: Agreement, seller: string) {

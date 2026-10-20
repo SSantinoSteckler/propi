@@ -1,4 +1,5 @@
 export type Agreement = {
+  environment: "legacy" | "test" | "production"; seller_id: string | null;
   id: string; owner_id: string; external_reference: string; provider_subscription_id: string | null;
   catalog_plan_id: string; amount: number; currency: string; status: string;
   creation_state: "creating" | "ready" | "uncertain" | "failed";

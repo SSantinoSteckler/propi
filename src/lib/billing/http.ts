@@ -12,6 +12,8 @@ async function body(request: Request) {
   try { return JSON.parse(text); } catch { throw new BillingError("INVALID_REQUEST", 400); }
 }
 const messages: Record<string,string> = {
+  TEST_USER_ONLY: "Esta prueba está habilitada únicamente para la cuenta ficticia designada.",
+  BILLING_SCOPE_MISMATCH: "Esta cuenta no corresponde al entorno de facturación configurado.",
   UNAUTHENTICATED: "Ingresá a tu cuenta para continuar.", FORBIDDEN: "No pudimos validar el origen de la solicitud.",
   BILLING_NOT_CONFIGURED: "La contratación todavía no está habilitada.", INVALID_REQUEST: "Revisá los datos enviados.",
   RATE_LIMIT: "Hiciste varias solicitudes. Esperá un momento y volvé a intentar.",

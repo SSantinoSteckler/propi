@@ -21,7 +21,10 @@ for (const name of (await readdir("supabase/migrations")).sort()) {
     "create extension if not exists pgcrypto with schema extensions;",
     "",
   );
-  await pg.exec(sql);
+  if (name === "202610200002_billing_isolation.sql") {
+    const { testBillingMigration } = await import("./test-billing-migration.mjs");
+    await testBillingMigration(pg, sql);
+  } else await pg.exec(sql);
   console.log(`Migración aplicada: ${name}`);
 }
 await pg.exec(await readFile("supabase/seed.sql", "utf8"));
@@ -56,8 +59,8 @@ async function test(name, fn) {
     console.log(`✓ ${name}`);
     count++;
   } finally {
-    await admin();
     await pg.exec("rollback");
+    await admin();
   }
 }
 const insert = (i, status = "disponible") =>
@@ -331,6 +334,10 @@ await test("analítica privada y no escribible por clientes", async () => {
 });
 const { billingTests } = await import("./test-billing-database.mjs");
 await billingTests({pg, A, B, user, admin, scalar, fails, test, insert});
+const { isolationTests } = await import("./test-billing-isolation.mjs");
+await isolationTests({pg, A, B, user, admin, scalar, fails, test});
+const { compatibilityTests } = await import("./test-billing-compatibility.mjs");
+await compatibilityTests({pg, A, B, test, scalar});
 console.log(
   `\n${count} pruebas de PostgreSQL/RLS aprobadas. Auth y Storage HTTP requieren Supabase real.`,
 );

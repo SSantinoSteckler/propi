@@ -6,6 +6,8 @@ MVP de portfolios inmobiliarios para Argentina. Next.js App Router + React 19 + 
 
 La configuración completa, nueva migración, comando administrativo idempotente, políticas de acceso, webhooks y preparación de Vercel están en [docs/MERCADOPAGO.md](docs/MERCADOPAGO.md). No se ejecutan creaciones de planes o cobros durante instalación, build o pruebas.
 
+Para actualizar una base existente, seguir [la transición Expand and Contract](docs/MERCADOPAGO-TRANSICION.md): la RPC anterior se conserva durante Expand, el flujo ficticio usa tablas separadas y Contract queda pospuesto fuera de las migraciones automáticas. Verificar primero el SHA activo de Production y el diagnóstico SQL; no aplicar cambios remotos sin autorización.
+
 ## Estado y alcance
 
 El repositorio inicial estaba vacío. Se implementaron las cinco fases en código: landing, autenticación, onboarding con progreso, panel, propiedades e imágenes, portfolios, fichas, colecciones, reseñas, analítica, límites de planes, HTML público para SEO y pruebas.
