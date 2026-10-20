@@ -52,11 +52,17 @@ export default function Billing({ returning = false }: { returning?: boolean }) 
     setBusy(true);
     try {
       const result = await billingApi<{ canceled: boolean }>("cancel", { confirm: true });
-      toast.success(result.canceled ? "La solicitud o suscripción de Premium quedó cancelada. No habrá nuevos cobros de ese acuerdo." : "Recibimos tu solicitud. Estamos verificando el estado.");
+      toast.success(result.canceled ? "La contratación de Premium quedó cancelada. No habrá nuevos cobros de ese acuerdo." : "Recibimos tu pedido. Estamos verificando el estado.");
       setConfirm(false); await query.refetch();
     } catch (error) { toast.error(error instanceof Error ? error.message : "No pudimos cancelar la renovación."); }
     finally { setBusy(false); }
   }
+  const cancelControl = view?.canCancel && <div className="billing-cancel">
+    {!confirm ? <Button className="btn-outline" onClick={() => setConfirm(true)}>{view.checkoutPending && view.priceConflict ? "Descartar contratación anterior" : view.cancelLabel}</Button> : <div role="group" aria-label="Confirmar cancelación de Premium">
+      <p>{view.checkoutPending ? "Vamos a cancelar esta contratación sin completar en Mercado Pago. Después podrás contratar Premium al precio actual. Tu plan actual no cambia." : "Vamos a cancelar la suscripción de Premium en Mercado Pago para detener futuros cobros. El acceso ya pagado se conserva hasta su vencimiento, salvo reintegros o contracargos."} No se borra tu catálogo.</p>
+      <div className="inline-actions"><Button busy={busy} onClick={cancel}>Confirmar cancelación</Button><Button disabled={busy} className="btn-outline" onClick={() => setConfirm(false)}>Volver</Button></div>
+    </div>}
+  </div>;
   return (
     <>
       <PageHeading eyebrow="TU CUENTA, CON CLARIDAD" title={returning ? "Estamos verificando tu suscripción" : "Planes y facturación"}
@@ -74,7 +80,7 @@ export default function Billing({ returning = false }: { returning?: boolean }) 
             <h2>{premium ? "Premium" : "Free"}</h2>
             <p>{premium ? "Tenés acceso a las funciones Premium." : "Tu portfolio profesional, sin costo mensual. Free no tiene cobros ni renovación."}</p>
             {data.entitlements.access_until && <p>Acceso ya abonado hasta el <strong>{date(data.entitlements.access_until)}</strong>.</p>}
-            {!premium && view?.open && <p>Tenés una solicitud o suscripción de Premium en gestión. Podés consultar su estado más abajo.</p>}
+            {!premium && view?.open && !view.checkoutPending && <p>La contratación de Premium todavía no habilitó el acceso. Revisá su estado más abajo.</p>}
             {premium && canceled && <div className="notice">Tu acceso ya pagado se conserva. La renovación de Premium está cancelada.</div>}
           </section>
           <section className="form-panel billing-upgrade">
@@ -83,31 +89,30 @@ export default function Billing({ returning = false }: { returning?: boolean }) 
             <p className="billing-price">{money(data.catalog.amount)} <small>/ mes</small></p>
             <ul className="billing-benefits">{["Más propiedades y colecciones publicadas", "Color y portada personalizados", "Portfolio, WhatsApp, reseñas y métricas básicas"].map((text) => <li key={text}><Check size={16} />{text}</li>)}</ul>
             <small>Hasta 1.000 propiedades publicadas y 1.000 colecciones activas como límite técnico. Las estadísticas avanzadas todavía no están implementadas.</small>
-            {!premium && <form onSubmit={subscribe}>
+            {!premium && view?.checkoutPending && <div className="notice" role="status">
+              <p>{view.priceConflict ? "Tenés una contratación anterior sin completar. Descartala para contratar Premium al precio actual." : "Tu contratación quedó sin completar en Mercado Pago. Podés continuar para autorizar el pago o cancelarla."}</p>
+              {cancelControl}
+            </div>}
+            {!premium && !view?.priceConflict && <form onSubmit={subscribe}>
               <label>Email de tu cuenta de Mercado Pago<input name="payer_email" type="email" autoComplete="email" required maxLength={254} placeholder="El email con el que vas a pagar" disabled={busy || !view?.canCheckout} /></label>
               <p className="form-note">Puede ser distinto del email con el que ingresás a Propi. No te pedimos datos de tarjeta.</p>
-              <Button type="submit" busy={busy} disabled={!view?.canCheckout}><CreditCard size={17} />{view?.checkoutPending ? "Continuar solicitud de Premium" : "Contratar Premium"}<ExternalLink size={15} /></Button>
+              <Button type="submit" busy={busy} disabled={!view?.canCheckout}><CreditCard size={17} />{view?.checkoutPending ? "Continuar en Mercado Pago" : "Contratar Premium"}<ExternalLink size={15} /></Button>
               <p className="form-note">Renovación automática mensual. Revisás y autorizás los cobros en Mercado Pago; podés cancelar la renovación desde acá.</p>
             </form>}
-            {!premium && (view?.priceConflict ? <div className="notice">Tenés una solicitud o suscripción de Premium con otro importe. Revisala más abajo antes de contratar al precio actual. No modificamos su importe automáticamente.</div> : !data.available && <div className="notice">La contratación todavía no está habilitada. Tu plan actual sigue disponible.</div>)}
+            {!premium && !view?.checkoutPending && (view?.priceConflict ? <div className="notice">Ya tenés una suscripción de Premium con otro importe. Revisá su estado más abajo antes de contratar nuevamente.</div> : !data.available && <div className="notice">La contratación todavía no está habilitada. Tu plan actual sigue disponible.</div>)}
+            {!premium && agreement?.creation_state === "failed" && <div className="notice">No se pudo iniciar la contratación anterior. Podés volver a intentar.</div>}
             <p className="billing-security"><ShieldCheck size={16} />El pago se completa en el sitio de Mercado Pago.</p>
           </section>
         </div>
-        {agreement && <section className="form-panel">
-          <span className="eyebrow">{view?.checkoutPending ? "SOLICITUD DE PREMIUM" : "SUSCRIPCIÓN DE PREMIUM"}</span>
-          <h2>{agreement.creation_state === "failed" ? "No se pudo iniciar Premium" : agreement.creation_state !== "ready" ? "Estamos verificando la solicitud" : labels[agreement.status] || "Estado en revisión"}</h2>
-          {agreement.creation_state !== "failed" && <p>Importe de este acuerdo de Premium: {money(agreement.amount)} por mes.</p>}
-          {view?.checkoutPending && <p>La contratación todavía no se completó. Esta solicitud no cambia tu plan actual ni confirma un pago.</p>}
+        {agreement && !view?.checkoutPending && agreement.creation_state !== "failed" && (!canceled || premium) && <section className="form-panel">
+          <span className="eyebrow">TU SUSCRIPCIÓN DE PREMIUM</span>
+          <h2>{agreement.creation_state !== "ready" ? "Estamos verificando la contratación" : labels[agreement.status] || "Estado en revisión"}</h2>
+          <p>Importe de tu suscripción: {money(agreement.amount)} por mes.</p>
           {agreement.status === "authorized" && !premium && <div className="notice">La autorización está registrada. Para habilitar Premium necesitamos confirmar un cobro aprobado con acceso vigente.</div>}
           {agreement.next_payment_date && agreement.status === "authorized" && !canceled && <p>Próximo intento de cobro informado por Mercado Pago: {date(agreement.next_payment_date)}.</p>}
           {agreement.status === "paused" && <p>La suscripción está pausada en Mercado Pago. El acceso depende del período ya abonado.</p>}
           {canceled && <p>Este acuerdo de Premium está cancelado y no tiene renovación. Tus propiedades y colecciones se conservan.</p>}
-          {view?.canCancel && <div className="billing-cancel">
-            {!confirm ? <Button className="btn-outline" onClick={() => setConfirm(true)}>{view.cancelLabel}</Button> : <div role="group" aria-label="Confirmar cancelación de Premium">
-              <p>{view.checkoutPending ? "Vamos a cancelar esta solicitud de Premium en Mercado Pago. Tu plan actual no cambia." : "Vamos a cancelar la suscripción de Premium en Mercado Pago para detener futuros cobros. El acceso ya pagado se conserva hasta su vencimiento, salvo reintegros o contracargos."} No se borra tu catálogo.</p>
-              <div className="inline-actions"><Button busy={busy} onClick={cancel}>Confirmar cancelación</Button><Button disabled={busy} className="btn-outline" onClick={() => setConfirm(false)}>Volver</Button></div>
-            </div>}
-          </div>}
+          {cancelControl}
         </section>}
         <section className="form-panel">
           <h2>Historial de cobros</h2>

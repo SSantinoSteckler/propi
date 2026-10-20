@@ -17,7 +17,7 @@ test('Free sin solicitud no tiene cancelación ni renovación y permite contrata
 
 test('checkout pendiente se cancela como solicitud sin presentarlo como renovación de Free', () => {
   expect(billingPresentation({ ...free, agreement: pending })).toMatchObject({
-    canCancel: true, cancelLabel: 'Cancelar solicitud', checkoutPending: true, canCheckout: true,
+    canCancel: true, cancelLabel: 'Cancelar contratación', checkoutPending: true, canCheckout: true,
   });
   for (const creation_state of ['creating', 'uncertain'] as const) {
     expect(billingPresentation({ ...free, agreement: { ...pending, creation_state } })).toMatchObject({ canCheckout: false, canCancel: false });
@@ -44,7 +44,7 @@ test('Premium pagado permite cancelar renovación; cancelado conserva acceso sin
 
 test('checkout de otro importe puede cancelarse sin habilitar otro checkout ni cambiar importes', () => {
   const data = { ...free, available: false, agreement: { ...pending, amount: 50 } };
-  expect(billingPresentation(data)).toMatchObject({ priceConflict: true, canCheckout: false, canCancel: true, cancelLabel: 'Cancelar solicitud' });
+  expect(billingPresentation(data)).toMatchObject({ priceConflict: true, canCheckout: false, canCancel: true, cancelLabel: 'Cancelar contratación' });
   expect(data.agreement.amount).toBe(50);
   expect(billingPresentation({ ...free, available: false })).toMatchObject({ priceConflict: false, canCheckout: false, canCancel: false });
 });
