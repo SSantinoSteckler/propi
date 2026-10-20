@@ -64,6 +64,7 @@ export default function Billing({ returning = false }: { returning?: boolean }) 
       {query.isError && <ErrorBox error={query.error} />}
       {query.isPending && <div className="skeleton" style={{ height: 280 }} role="status">Consultando tu cuenta…</div>}
       {data && <>
+        {data.temporary_price && <div className="notice" role="status">Precio temporal de prueba: {money(data.catalog.amount)} por mes para nuevas suscripciones. Es un cobro real y recurrente; podés cancelar la renovación desde acá.</div>}
         {returning && <div className="notice" role="status">{premium ? "Premium ya está habilitado en tu cuenta." : polls >= 12 ? "La confirmación está demorando. Podés volver más tarde o actualizar el estado; no hace falta contratar otra vez." : "Volver de Mercado Pago no confirma el pago. Estamos consultando la autorización y el cobro."}</div>}
         {agreement?.sync_error && <div className="notice error" role="alert">Hay una verificación pendiente. Conservamos el último estado validado y no vamos a crear otra suscripción mientras se resuelve.</div>}
         <div className="billing-grid">

@@ -1,8 +1,9 @@
 import type { Agreement, MPInvoice, MPPayment, MPPlan, MPSubscription, VerifiedPayment } from "./types";
 import catalog from "./catalog.json" with { type: "json" };
+import type { DatabaseFailureDiagnostic } from "../supabase/admin-diagnostics";
 
 export class BillingError extends Error {
-  constructor(public code: string, public status = 409) { super(code); }
+  constructor(public code: string, public status = 409, public diagnostic?: DatabaseFailureDiagnostic) { super(code); }
 }
 export function requireCondition(value: unknown, code: string): asserts value {
   if (!value) throw new BillingError(code, 502);

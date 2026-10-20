@@ -49,7 +49,7 @@ function server(pg,ref,sellerId,site='https://local-billing.example') {
   calls.push({path,method});const url=new URL(path,'https://provider.invalid');
   if(path==='/users/me')return {id:Number(sellerId),site_id:'MLA',tags:sellerId==='3779671542'?['test_user']:[]};
   if(path==='/preapproval_plan/catalog')return {id:'catalog',collector_id:Number(sellerId),status:'active',reason:'Propi Premium',back_url:`${site}/dashboard/billing/return`,auto_recurring:recurring};
-  if(path==='/preapproval'&&method==='POST'){const id=`sub-${sellerId}-${instance}-${++sequence}`,s={id,collector_id:Number(sellerId),payer_id:202,external_reference:body.external_reference,status:'pending',auto_recurring:recurring,last_modified:stamp(),init_point:`https://www.mercadopago.com.ar/subscriptions/checkout?preapproval_id=${id}`};subscriptions.set(id,s);return structuredClone(s);}
+  if(path==='/preapproval'&&method==='POST'){const id=`sub-${sellerId}-${instance}-${++sequence}`,s={id,collector_id:Number(sellerId),payer_id:202,external_reference:body.external_reference,status:'pending',auto_recurring:structuredClone(body.auto_recurring || recurring),last_modified:stamp(),init_point:`https://www.mercadopago.com.ar/subscriptions/checkout?preapproval_id=${id}`};subscriptions.set(id,s);return structuredClone(s);}
   if(url.pathname==='/preapproval/search')return {results:[...subscriptions.values()],paging:{total:subscriptions.size}};
   if(url.pathname.startsWith('/preapproval/')){const id=url.pathname.split('/').at(-1),s=subscriptions.get(id);if(!s)throw new ProviderError(404);if(method==='PUT')Object.assign(s,body,{last_modified:stamp()});return structuredClone(s);}
   if(url.pathname==='/authorized_payments/search'){
@@ -86,8 +86,9 @@ function server(pg,ref,sellerId,site='https://local-billing.example') {
  function approve(id,status='approved') {
   const s=subscriptions.get(id);Object.assign(s,{status:'authorized',last_modified:stamp()});
   const pid=String(instance*100000+(++sequence)),iid=String(instance*100000+(++sequence)),date=stamp();
-  const invoice={id:iid,preapproval_id:id,external_reference:s.external_reference,transaction_amount:14900,currency_id:'ARS',debit_date:date,last_modified:date,status:'processed',payment:{id:pid,status}};
-  invoices.set(iid,invoice);payments.set(pid,{id:pid,collector_id:Number(sellerId),payer:{id:202},status,transaction_amount:14900,currency_id:'ARS',date_approved:status==='approved'?date:undefined,date_last_updated:date});return invoice;
+  const amount=s.auto_recurring.transaction_amount;
+  const invoice={id:iid,preapproval_id:id,external_reference:s.external_reference,transaction_amount:amount,currency_id:'ARS',debit_date:date,last_modified:date,status:'processed',payment:{id:pid,status}};
+  invoices.set(iid,invoice);payments.set(pid,{id:pid,collector_id:Number(sellerId),payer:{id:202},status,transaction_amount:amount,currency_id:'ARS',date_approved:status==='approved'?date:undefined,date_last_updated:date});return invoice;
  }
  return {db,load,calls,subscriptions,invoices,payments,approve,stamp};
 }
@@ -174,6 +175,59 @@ export async function compatibilityTests({pg,A,B,test,scalar}) {
    assert.equal(await scalar(`select count(*)::int from billing_agreements where owner_id='${C}'`),0);
    assert.equal(invoice.preapproval_id,a.provider_subscription_id);
    console.log(`  Git verificado: ${ref}=${sha}; proveedor simulado, SQL real en memoria`);
+  } finally {for(const name of names)if(saved[name]===undefined)delete process.env[name];else process.env[name]=saved[name];}
+ });
+}
+
+export async function checkoutOfferTests({pg,A,B,test,scalar}) {
+ await test('precio temporal global: nuevas altas a 50, existentes intactas y restauracion a 14900',async()=>{
+  const names=['MERCADOPAGO_ENVIRONMENT','MERCADOPAGO_SELLER_ID','MERCADOPAGO_ACCESS_TOKEN','MERCADOPAGO_PRO_PLAN_ID','MERCADOPAGO_WEBHOOK_SECRET','SUPABASE_SECRET_KEY','VERCEL','VERCEL_ENV'];
+  const saved=Object.fromEntries(names.map(name=>[name,process.env[name]]));
+  try {
+   Object.assign(process.env,{MERCADOPAGO_ENVIRONMENT:'production',MERCADOPAGO_SELLER_ID:'1355208203',MERCADOPAGO_ACCESS_TOKEN:'launch-fixture-not-real',MERCADOPAGO_PRO_PLAN_ID:'catalog',MERCADOPAGO_WEBHOOK_SECRET:'launch-fixture-webhook',SUPABASE_SECRET_KEY:'launch-fixture-not-real'});
+   delete process.env.VERCEL;delete process.env.VERCEL_ENV;
+   const modern=server(pg,null,'1355208203'),runtime=modern.load('src/lib/billing/runtime.ts');
+   const previous=server(pg,'50cddf2ada4eaf6ae635b00bbdb13cb2f5c6193a','1355208203'),normal=previous.load('src/lib/billing/runtime.ts');
+   assert.equal((await runtime.status(A,false)).catalog.amount,50);
+   assert.equal((await runtime.status(B,false)).catalog.amount,50);
+   // Preserve a pending contract made at the original public price.
+   await normal.subscribe(B,'existing-buyer@example.invalid');
+   const b=(await pg.query(`select * from billing_agreements where owner_id='${B}'`)).rows[0];
+   assert.equal(Number(b.amount),14900);
+   assert.equal((await runtime.status(B,false)).available,false);
+   const beforeConflict=modern.calls.filter(call=>call.method==='POST').length;
+   await assert.rejects(runtime.subscribe(B,'existing-buyer@example.invalid'),/CHECKOUT_PRICE_CHANGED/);
+   assert.equal(modern.calls.filter(call=>call.method==='POST').length,beforeConflict);
+   await runtime.subscribe(A,'buyer@example.invalid');
+   const a=(await pg.query(`select * from billing_agreements where owner_id='${A}'`)).rows[0];
+   assert.equal(Number(a.amount),50);assert.equal(a.environment,'production');assert.equal(a.seller_id,'1355208203');
+   assert.equal(modern.subscriptions.get(a.provider_subscription_id).auto_recurring.transaction_amount,50);
+   await runtime.subscribe(A,'buyer@example.invalid');
+   assert.equal(modern.calls.filter(call=>call.path==='/preapproval'&&call.method==='POST').length,1);
+   assert.equal((await runtime.getUserEntitlements(A)).premium,false);
+   const D='88888888-8888-4888-8888-888888888888';
+   await pg.exec(`insert into auth.users(id,email) values('${D}','another-real-account@example.invalid')`);
+   await runtime.subscribe(D,'another-buyer@example.invalid');
+   assert.equal(Number(await scalar(`select amount from billing_agreements where owner_id='${D}'`)),50);
+   const invoice=modern.approve(a.provider_subscription_id),id=String(invoice.id),ts=String(Date.now()),requestId='global-50-webhook';
+   const signature=createHmac('sha256',process.env.MERCADOPAGO_WEBHOOK_SECRET).update(`id:${id};request-id:${requestId};ts:${ts};`).digest('hex');
+   const route=modern.load('src/app/api/mercadopago/webhook/route.ts');
+   const notice=()=>new Request(`https://local-billing.example/api/mercadopago/webhook?data.id=${id}`,{method:'POST',headers:{'content-type':'application/json','x-request-id':requestId,'x-signature':`ts=${ts},v1=${signature}`},body:JSON.stringify({type:'subscription_authorized_payment',data:{id}})});
+   assert.equal((await route.POST(notice())).status,200);assert.equal((await route.POST(notice())).status,200);
+   assert.equal((await runtime.getUserEntitlements(A)).premium,true);assert.equal((await runtime.getUserEntitlements(B)).premium,false);
+   assert.equal(await scalar(`select count(*)::int from subscription_payments where owner_id='${A}' and amount=50 and verified`),1);
+   assert.equal(await scalar('select count(*)::int from billing_test_agreements'),0);
+   // The previous server has a 14900 catalog, yet validates the paid 50 ledger.
+   for(const kind of ['subscriptions','invoices','payments'])for(const [id,value] of modern[kind])previous[kind].set(id,value);
+   await normal.synchronize(A);
+   assert.equal((await normal.status(A,false)).catalog.amount,14900);
+   assert.equal((await normal.status(A,false)).agreement.amount,50);
+   assert.equal((await normal.cancel(A)).canceled,true);assert.equal((await normal.getUserEntitlements(A)).premium,true);
+   const C='99999999-9999-4999-8999-999999999999';
+   await pg.exec(`insert into auth.users(id,email) values('${C}','global-price-fiction@example.invalid');insert into private.billing_test_account(owner_id) values('${C}')`);
+   const before=modern.calls.length;
+   await assert.rejects(runtime.subscribe(C,'fiction@example.invalid'),/BILLING_SCOPE_MISMATCH/);
+   assert.equal(modern.calls.length,before);assert.equal(await scalar(`select count(*)::int from billing_agreements where owner_id='${C}'`),0);
   } finally {for(const name of names)if(saved[name]===undefined)delete process.env[name];else process.env[name]=saved[name];}
  });
 }

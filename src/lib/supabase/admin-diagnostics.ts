@@ -1,3 +1,35 @@
+const knownCodes = ['PGRST301', 'PGRST302', 'PGRST303', 'PGRST202', 'PGRST205', '42501', '42P01', '42883'] as const;
+export type DatabaseOperation = 'billing_is_test_owner' | 'billing_get_entitlements' | 'billing_rate_limit' | 'billing_query';
+
+// Return a fixed category, never a provider message, hint, URL, or arbitrary code.
+export function classifyAdminFailure(status: number | null, error: unknown, secret = '') {
+  const value = error && typeof error === 'object' ? error as Record<string, unknown> : {};
+  const code = knownCodes.find(item => item === value.code) || null;
+  let message = [value.message, value.error_description, value.error]
+    .filter(item => typeof item === 'string').join(' ');
+  if (secret) message = message.split(secret).join('[REDACTED]');
+  if (code === '42501') return { category: 'INSUFFICIENT_PERMISSIONS', code } as const;
+  if (code === 'PGRST202' || code === '42883') return { category: 'RPC_NOT_AVAILABLE', code } as const;
+  if (code === 'PGRST205' || code === '42P01') return { category: 'TABLE_NOT_AVAILABLE', code } as const;
+  if (status === 401 || status === 403) {
+    if (/browser|user.?agent/i.test(message)) return { category: 'BROWSER_CONTEXT_REJECTED', code } as const;
+    if (/invalid api.?key|api.?key.{0,50}(?:invalid|revoked|expired|not found)/i.test(message)) return { category: 'API_KEY_REJECTED', code } as const;
+    if (['PGRST301', 'PGRST302', 'PGRST303'].includes(code || '') || /jwt|token/i.test(message)) return { category: 'JWT_REJECTED', code } as const;
+    return { category: 'AUTH_REJECTION_UNSPECIFIED', code } as const;
+  }
+  if (status === 0) return { category: 'CONNECTION_FAILED', code } as const;
+  if (status !== null && status >= 500) return { category: 'UPSTREAM_UNAVAILABLE', code } as const;
+  return { category: 'DATABASE_QUERY_FAILED', code } as const;
+}
+
+export function databaseFailureDiagnostic(result: { status?: number; error: unknown }, operation: DatabaseOperation, secret = '') {
+  const status = typeof result.status === 'number' && Number.isInteger(result.status)
+    && (result.status === 0 || (result.status >= 100 && result.status <= 599)) ? result.status : null;
+  const failure = classifyAdminFailure(status, result.error, secret);
+  return { operation, upstreamStatus: status, upstreamCode: failure.code, category: failure.category };
+}
+export type DatabaseFailureDiagnostic = ReturnType<typeof databaseFailureDiagnostic>;
+
 // Auth failures only. Never log request headers, URLs, raw bodies, or exceptions.
 export async function logAdminAuthFailure(
   response: Response,
@@ -23,17 +55,11 @@ export async function logAdminAuthFailure(
       }
       if (category !== 'ERROR_BODY_TOO_LARGE') {
         text = key ? text.split(key).join('[REDACTED]') : text;
-        let message = text, code: unknown;
+        let error: unknown = { message: text };
         try {
-          const body = JSON.parse(text);
-          code = body?.code;
-          message = [body?.message, body?.error_description, body?.error, body?.error?.message]
-            .filter(value => typeof value === 'string').join(' ');
+          error = JSON.parse(text);
         } catch { /* Plain error pages are classified but never printed. */ }
-        if (/browser|user.?agent/i.test(message)) category = 'BROWSER_CONTEXT_REJECTED';
-        else if (/invalid api.?key|api.?key.{0,50}(?:invalid|revoked|expired|not found)/i.test(message)) category = 'API_KEY_REJECTED';
-        else if (['PGRST301', 'PGRST302', 'PGRST303'].includes(String(code)) || /jwt|token/i.test(message)) category = 'JWT_REJECTED';
-        else if (code === '42501') category = 'INSUFFICIENT_PERMISSIONS';
+        category = classifyAdminFailure(response.status, error, key).category;
       }
     }
     write(JSON.stringify({

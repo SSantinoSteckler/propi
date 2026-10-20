@@ -1,18 +1,21 @@
 import "server-only";
 import { adminDb } from "../supabase/admin";
+import { databaseFailureDiagnostic, type DatabaseOperation } from "../supabase/admin-diagnostics";
 import { mp, ProviderError, withProviderBudget } from "../mercadopago/client";
 import { readAuthorizedPayments, type InvoiceSearchPage } from "../mercadopago/authorized-payments";
 import { SITE_URL } from "../config";
 import catalog from "./catalog.json";
 import { reservedCreation } from "./creation";
+import { checkoutOffer } from "./checkout-offer";
 import { processBillingEvent, type BillingEvent } from "./event-processing";
 import { billingScope, assertScopeOwner, assertSeller, assertAgreementScope, scopedQuery, billingReturnUrl, billingTable, type BillingTable } from "./scope";
 import { BillingError, checkoutUrl, nextBillingMonth, requireCondition, validatePlan, validateSubscription, verifyInvoice } from "./domain";
 import type { Agreement, BillingStatus, Entitlements, MPInvoice, MPPayment, MPPlan, MPSubscription, VerifiedPayment } from "./types";
 
 type Db = ReturnType<typeof adminDb>;
-function checked<T>(result: { data: T; error: unknown }): T {
-  if (result.error) throw new BillingError("DATABASE_UNAVAILABLE", 503);
+function checked<T>(result: { data: T; error: unknown; status?: number }, operation: DatabaseOperation = "billing_query"): T {
+  if (result.error) throw new BillingError("DATABASE_UNAVAILABLE", 503,
+    databaseFailureDiagnostic(result, operation, process.env.SUPABASE_SECRET_KEY));
   return result.data;
 }
 export function billingAvailable() {
@@ -23,12 +26,12 @@ export function billingAvailable() {
 }
 export async function getUserEntitlements(owner: string, db = adminDb()): Promise<Entitlements> {
   await assertOwner(owner, db);
-  return checked(await db.rpc("billing_get_entitlements", { p_owner: owner })) as Entitlements;
+  return checked(await db.rpc("billing_get_entitlements", { p_owner: owner }), "billing_get_entitlements") as Entitlements;
 }
 async function assertOwner(owner: string, db: Db) {
   const scope = billingScope();
   assertScopeOwner(scope, owner);
-  const reserved = checked(await db.rpc("billing_is_test_owner", { p_owner: owner }));
+  const reserved = checked(await db.rpc("billing_is_test_owner", { p_owner: owner }), "billing_is_test_owner");
   if (Boolean(reserved) !== (scope.environment === "test")) throw new BillingError("BILLING_SCOPE_MISMATCH", 403);
 }
 function scopedRows(db: Db, table: BillingTable) {
@@ -36,7 +39,7 @@ function scopedRows(db: Db, table: BillingTable) {
   return scopedQuery(db.from(billingTable(table, scope)).select("*"), scope);
 }
 export async function rateLimit(db: Db, key: string, limit: number, seconds: number) {
-  if (!checked(await db.rpc("billing_rate_limit", { p_key: key, p_limit: limit, p_seconds: seconds }))) throw new BillingError("RATE_LIMIT", 429);
+  if (!checked(await db.rpc("billing_rate_limit", { p_key: key, p_limit: limit, p_seconds: seconds }), "billing_rate_limit")) throw new BillingError("RATE_LIMIT", 429);
 }
 export async function withLock<T>(db: Db, key: string, work: (token: string) => Promise<T>): Promise<T> {
  return withProviderBudget(async () => {
@@ -108,6 +111,7 @@ export async function synchronize(owner: string, db = adminDb(), agreementId?: s
 export async function subscribe(owner: string, payerEmail: string, db = adminDb()) {
   if (!billingAvailable()) throw new BillingError("BILLING_NOT_CONFIGURED", 503);
   await assertOwner(owner, db);
+  const offer = checkoutOffer();
   return withLock(db, `billing:${owner}`, async (token) => {
     await rateLimit(db, `checkout:${owner}`, 5, 600);
     const entitlement = await getUserEntitlements(owner, db);
@@ -115,6 +119,7 @@ export async function subscribe(owner: string, payerEmail: string, db = adminDb(
     const seller = await sellerId();
     let a = await currentAgreement(db, owner);
     if (a && a.creation_state !== "failed" && !["cancelled","canceled"].includes(a.status)) {
+      if (Number(a.amount) !== offer.catalog.amount) throw new BillingError("CHECKOUT_PRICE_CHANGED",409);
       // Never repeat an ambiguous POST, even after its lease expires.
       const remote = await remoteFor(a, db);
       if (!remote) throw new BillingError("AWAITING_RECONCILIATION");
@@ -127,7 +132,7 @@ export async function subscribe(owner: string, payerEmail: string, db = adminDb(
     validatePlan(plan, seller, returnUrl, scope.environment === "test");
     return reservedCreation({
      reserve: async () => checked(await db.from(billingTable("billing_agreements", billingScope())).insert({ owner_id: owner, catalog_plan_id: plan.id, environment: scope.environment, seller_id: seller,
-      amount: plan.auto_recurring.transaction_amount, currency: plan.auto_recurring.currency_id }).select().single()) as Agreement,
+      amount: offer.catalog.amount, currency: plan.auto_recurring.currency_id }).select().single()) as Agreement,
      create: (a) => mp<MPSubscription>("/preapproval", "POST", {
         reason: catalog.name, external_reference: a.external_reference, payer_email: payerEmail,
         auto_recurring: { frequency: 1, frequency_type: "months", transaction_amount: Number(a.amount), currency_id: a.currency },
@@ -168,6 +173,7 @@ export async function cancel(owner: string, db = adminDb()) {
 }
 export async function status(owner: string, refresh: boolean, db = adminDb()): Promise<BillingStatus> {
   await assertOwner(owner, db);
+  const offer = checkoutOffer();
   await rateLimit(db, `status:${owner}`, 60, 60);
   let a = await currentAgreement(db, owner);
   if (refresh && a && billingAvailable() && (!a.sync_error || Date.parse(a.reconcile_after) <= Date.now()) && Date.now() - Date.parse(a.last_synced_at || "1970-01-01") > 30000) {
@@ -176,7 +182,8 @@ export async function status(owner: string, refresh: boolean, db = adminDb()): P
   }
   const scope = billingScope();
   const payments = checked(await scopedQuery(db.from(billingTable("subscription_payments", billingScope())).select("id,amount,currency,status,paid_at,coverage_end"), scope).eq("owner_id", owner).order("created_at", { ascending: false }).limit(50));
-  return { catalog, available: billingAvailable(), entitlements: await getUserEntitlements(owner, db),
+  const priceConflict = a && a.creation_state !== "failed" && !["cancelled","canceled"].includes(a.status) && Number(a.amount) !== offer.catalog.amount;
+  return { catalog: offer.catalog, temporary_price: offer.temporaryPrice, available: billingAvailable() && !priceConflict, entitlements: await getUserEntitlements(owner, db),
     agreement: a ? { id: a.id, amount: Number(a.amount), currency: a.currency, status: a.status, creation_state: a.creation_state, next_payment_date: a.next_payment_date,
       last_synced_at: a.last_synced_at, sync_error: a.sync_error } : null, payments: payments || [] };
 }

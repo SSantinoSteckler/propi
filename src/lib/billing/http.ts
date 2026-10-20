@@ -13,6 +13,8 @@ async function body(request: Request) {
 }
 const messages: Record<string,string> = {
   TEST_USER_ONLY: "Esta prueba está habilitada únicamente para la cuenta ficticia designada.",
+  INVALID_PRICE_CONFIGURATION: "No pudimos validar el precio de la suscripción.",
+  CHECKOUT_PRICE_CHANGED: "Ya tenés una suscripción iniciada con otro importe. Revisala antes de continuar; no cambiamos su precio automáticamente.",
   BILLING_SCOPE_MISMATCH: "Esta cuenta no corresponde al entorno de facturación configurado.",
   UNAUTHENTICATED: "Ingresá a tu cuenta para continuar.", FORBIDDEN: "No pudimos validar el origen de la solicitud.",
   BILLING_NOT_CONFIGURED: "La contratación todavía no está habilitada.", INVALID_REQUEST: "Revisá los datos enviados.",
@@ -24,11 +26,26 @@ const messages: Record<string,string> = {
 };
 export const subscribeSchema = z.object({ payer_email: z.string().trim().email().max(254) }).strict();
 export const cancelSchema = z.object({ confirm: z.literal(true) }).strict();
-export function billingFailure(error: unknown) {
+export function billingFailure(error: unknown, diagnosticAllowed = false) {
   const code = error instanceof BillingError ? error.code : "TEMPORARY_ERROR";
-  return json({ code, message: messages[code] || "No pudimos completar la operación. Intentá nuevamente más tarde." }, error instanceof BillingError ? error.status : 503);
+  // Only fixed categories and deployment/configuration state are exposed.
+  // Never include an exception, credentials, database message, or request body.
+  const diagnostic = diagnosticAllowed && (code === "DATABASE_UNAVAILABLE" || code === "BILLING_SCOPE_MISMATCH"
+    || code === "BILLING_NOT_CONFIGURED" || code === "INVALID_ADMIN_CONFIGURATION"
+    || code === "INVALID_ADMIN_DESTINATION" || code === "TEMPORARY_ERROR") ? {
+      version: "billing-db-v2",
+      deploymentCommit: /^[a-f0-9]{40}$/i.test(process.env.VERCEL_GIT_COMMIT_SHA || "") ? process.env.VERCEL_GIT_COMMIT_SHA : null,
+      deploymentEnvironment: ["production", "preview", "development"].includes(process.env.VERCEL_ENV || "") ? process.env.VERCEL_ENV : "local_or_unknown",
+      adminKeyConfigured: Boolean(process.env.SUPABASE_SECRET_KEY),
+      configuredKeyType: process.env.SUPABASE_SECRET_KEY?.startsWith("sb_secret_") ? "secret"
+        : process.env.SUPABASE_SECRET_KEY?.split(".").length === 3 ? "legacy_jwt" : "other_or_missing",
+      ...(error instanceof BillingError ? error.diagnostic : undefined),
+    } : undefined;
+  return json({ code, message: messages[code] || "No pudimos completar la operación. Intentá nuevamente más tarde.",
+    ...(diagnostic ? { diagnostic } : {}) }, error instanceof BillingError ? error.status : 503);
 }
 export async function billingRequest(request: Request, operation: "subscribe" | "status" | "cancel") {
+  let diagnosticAllowed = false;
   try {
     if (operation !== "status" && request.headers.get("origin") !== SITE_URL) throw new BillingError("FORBIDDEN", 403);
     const authorization = request.headers.get("authorization");
@@ -36,6 +53,7 @@ export async function billingRequest(request: Request, operation: "subscribe" | 
     // Import only after basic checks. No authentication-system migration needed.
     const { authenticate } = await import("../supabase/server");
     const user = await authenticate(authorization.slice(7));
+    diagnosticAllowed = operation === "status";
     const runtime = await import("./runtime");
     if (operation === "subscribe") {
       const parsed = subscribeSchema.safeParse(await body(request));
@@ -47,5 +65,5 @@ export async function billingRequest(request: Request, operation: "subscribe" | 
       return json(await runtime.cancel(user.id));
     }
     return json(await runtime.status(user.id, new URL(request.url).searchParams.get("refresh") === "1"));
-  } catch (error) { return billingFailure(error); }
+  } catch (error) { return billingFailure(error, diagnosticAllowed); }
 }

@@ -336,8 +336,9 @@ const { billingTests } = await import("./test-billing-database.mjs");
 await billingTests({pg, A, B, user, admin, scalar, fails, test, insert});
 const { isolationTests } = await import("./test-billing-isolation.mjs");
 await isolationTests({pg, A, B, user, admin, scalar, fails, test});
-const { compatibilityTests } = await import("./test-billing-compatibility.mjs");
+const { compatibilityTests, checkoutOfferTests } = await import("./test-billing-compatibility.mjs");
 await compatibilityTests({pg, A, B, test, scalar});
+await checkoutOfferTests({pg, A, B, test, scalar});
 console.log(
   `\n${count} pruebas de PostgreSQL/RLS aprobadas. Auth y Storage HTTP requieren Supabase real.`,
 );

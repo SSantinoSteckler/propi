@@ -18,6 +18,7 @@ export type VerifiedPayment = {
 };
 export type Entitlements = { plan: "free" | "pro"; premium: boolean; access_until: string | null };
 export type BillingStatus = {
+  temporary_price?: boolean;
   catalog: { name: string; amount: number; currency: string }; available: boolean;
   entitlements: Entitlements; agreement: Pick<Agreement,"id"|"amount"|"currency"|"status"|"creation_state"|"next_payment_date"|"last_synced_at"|"sync_error"> | null;
   payments: { id: string; amount: number; currency: string; status: string; paid_at: string | null; coverage_end: string | null }[];
