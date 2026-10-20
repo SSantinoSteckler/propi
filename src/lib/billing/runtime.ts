@@ -1,6 +1,7 @@
 import "server-only";
 import { adminDb } from "../supabase/admin";
 import { mp, ProviderError, withProviderBudget } from "../mercadopago/client";
+import { readAuthorizedPayments, type InvoiceSearchPage } from "../mercadopago/authorized-payments";
 import { SITE_URL } from "../config";
 import catalog from "./catalog.json";
 import { reservedCreation } from "./creation";
@@ -70,24 +71,19 @@ async function applyRemote(db: Db, a: Agreement, s: MPSubscription, token: strin
   assertAgreementScope(billingScope(), a);
   validateSubscription(s, a, seller);
   const payments: VerifiedPayment[] = [];
-  let complete = false, validations = 0;
-  for (let offset = 0; offset < 500; offset += 100) {
-    const page = await mp<{ paging: { total: number }; results: MPInvoice[] }>(`/authorized_payments/search?preapproval_id=${encodeURIComponent(s.id)}&limit=100&offset=${offset}`);
-    requireCondition(Array.isArray(page.results), "INVALID_INVOICE_RESPONSE");
-    for (const invoice of page.results) {
-      let payment: MPPayment | null = null;
-      // Only recent/current service cycles need a fresh Payments API lookup.
-      // Older invoices remain in the ledger but cannot grant access unverified.
-      const relevant = invoice.debit_date && Date.parse(nextBillingMonth(invoice.debit_date)) > Date.now() - 86400000;
-      if (invoice.payment?.id && relevant) {
-        if (++validations > 8) throw new BillingError("SYNC_BATCH_LIMIT", 503);
-        payment = await mp<MPPayment>(`/v1/payments/${encodeURIComponent(String(invoice.payment.id))}`);
-      }
-      payments.push(verifyInvoice(invoice, payment, s, a, seller));
+  let validations = 0;
+  const invoices = await readAuthorizedPayments({ preapproval_id: s.id }, path => mp<InvoiceSearchPage>(path));
+  for (const invoice of invoices) {
+    let payment: MPPayment | null = null;
+    // Only recent/current service cycles need a fresh Payments API lookup.
+    // Older invoices remain in the ledger but cannot grant access unverified.
+    const relevant = invoice.debit_date && Date.parse(nextBillingMonth(invoice.debit_date)) > Date.now() - 86400000;
+    if (invoice.payment?.id && relevant) {
+      if (++validations > 8) throw new BillingError("SYNC_BATCH_LIMIT", 503);
+      payment = await mp<MPPayment>(`/v1/payments/${encodeURIComponent(String(invoice.payment.id))}`);
     }
-    if (offset + page.results.length >= (page.paging?.total ?? page.results.length)) { complete = true; break; }
+    payments.push(verifyInvoice(invoice, payment, s, a, seller));
   }
-  requireCondition(complete, "SYNC_PAGINATION_LIMIT");
   checked(await db.rpc("billing_apply_sync_v2", { p_id: a.id, p_token: token,
     p_snapshot: { environment: billingScope().environment, seller_id: seller, id: s.id, external_reference: s.external_reference, status: s.status, updated_at: s.last_modified,
       next_payment_date: s.next_payment_date || null, checkout_url: s.init_point ? checkoutUrl(s.init_point) : null }, p_payments: payments }));
@@ -201,7 +197,7 @@ export async function processEvent(key: string, db = adminDb()) {
     },
     subscription: (id) => mp<MPSubscription>(`/preapproval/${encodeURIComponent(id)}`),
     invoice: (id) => mp<MPInvoice>(`/authorized_payments/${encodeURIComponent(id)}`),
-    invoicesForPayment: async (id) => (await mp<{ results: MPInvoice[] }>(`/authorized_payments/search?payment_id=${encodeURIComponent(id)}&limit=20`)).results,
+    invoicesForPayment: (id) => readAuthorizedPayments({ payment_id: id }, path => mp<InvoiceSearchPage>(path)),
     findBySubscription: async (id) => checked(await scopedRows(db, "billing_agreements").eq("provider_subscription_id", id).maybeSingle()) as Agreement | null,
     findByReference: async (reference) => checked(await scopedRows(db, "billing_agreements").eq("external_reference", reference).maybeSingle()) as Agreement | null,
     synchronize: async (agreement) => { assertAgreementScope(scope, agreement); await synchronize(agreement.owner_id, db, agreement.id); },

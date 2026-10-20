@@ -262,3 +262,23 @@ ficticio 3779671542 en modo local `MERCADOPAGO_ENVIRONMENT=test`, para un único
 rechaza ese modo. El cron nuevo consulta producción y legacy; las tablas ficticias
 están separadas y tampoco son visibles para las consultas del cron anterior.
 No ejecutar la migración de aislamiento remota sin revisión y autorización.
+
+## Facturas recurrentes: HTTP 400 por paginación
+
+En la prueba controlada del 2026-10-20, `/authorized_payments/search` rechazó
+`limit=20` y `limit=100`. Con `offset=0` y sin `limit` respondió HTTP 200,
+con `paging.limit=12`. La integración omite ese parámetro y avanza según el
+número de resultados recibidos, sin fijar el tamaño de página en 12 ni en 100.
+La misma lectura completa se utiliza al correlacionar una notificación `payment`.
+Una respuesta inconsistente o una búsqueda incompleta no permite escribir el
+snapshot de facturación; se mantienen los presupuestos de consultas y registros.
+
+La sincronización iniciada desde facturación puede actualizar la suscripción,
+las facturas y los pagos en las tablas de prueba. Reiniciar Next.js y abrir
+facturación también puede activar sincronizaciones y escrituras normales:
+realizarlo únicamente cuando se autorice continuar la prueba.
+
+Verificación de esta corrección: TypeScript, build, 87 pruebas unitarias y 39
+pruebas PostgreSQL/RLS en memoria aprobadas. Incluyen páginas de 12, correlación
+por pago entre páginas, respuestas incompletas y conservación del aislamiento.
+No se ejecutó sincronización remota durante esta corrección.

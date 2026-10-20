@@ -52,7 +52,14 @@ function server(pg,ref,sellerId,site='https://local-billing.example') {
   if(path==='/preapproval'&&method==='POST'){const id=`sub-${sellerId}-${instance}-${++sequence}`,s={id,collector_id:Number(sellerId),payer_id:202,external_reference:body.external_reference,status:'pending',auto_recurring:recurring,last_modified:stamp(),init_point:`https://www.mercadopago.com.ar/subscriptions/checkout?preapproval_id=${id}`};subscriptions.set(id,s);return structuredClone(s);}
   if(url.pathname==='/preapproval/search')return {results:[...subscriptions.values()],paging:{total:subscriptions.size}};
   if(url.pathname.startsWith('/preapproval/')){const id=url.pathname.split('/').at(-1),s=subscriptions.get(id);if(!s)throw new ProviderError(404);if(method==='PUT')Object.assign(s,body,{last_modified:stamp()});return structuredClone(s);}
-  if(url.pathname==='/authorized_payments/search'){const result=[...invoices.values()].filter(i=>url.searchParams.has('payment_id')?String(i.payment.id)===url.searchParams.get('payment_id'):i.preapproval_id===url.searchParams.get('preapproval_id'));return {results:structuredClone(result),paging:{total:result.length}};}
+  if(url.pathname==='/authorized_payments/search'){
+   // Preserve historical provider fixtures for old Git binaries. The current
+   // server must obey the real endpoint's rejected `limit` and default page 12.
+   if(!ref&&url.searchParams.has('limit'))throw new ProviderError(400);
+   const result=[...invoices.values()].filter(i=>url.searchParams.has('payment_id')?String(i.payment.id)===url.searchParams.get('payment_id'):i.preapproval_id===url.searchParams.get('preapproval_id'));
+   const offset=Number(url.searchParams.get('offset')||0),limit=ref?100:12;
+   return {results:structuredClone(result.slice(offset,offset+limit)),paging:{offset,limit,total:result.length}};
+  }
   if(url.pathname.startsWith('/authorized_payments/'))return structuredClone(invoices.get(url.pathname.split('/').at(-1)));
   if(url.pathname.startsWith('/v1/payments/'))return structuredClone(payments.get(url.pathname.split('/').at(-1)));
   throw new Error('Unexpected provider request blocked');
@@ -91,6 +98,7 @@ export async function compatibilityTests({pg,A,B,test,scalar}) {
  if(process.env.BILLING_DEPLOYED_COMMIT){assert.match(process.env.BILLING_DEPLOYED_COMMIT,/^[a-f0-9]{7,40}$/i);refs.push(process.env.BILLING_DEPLOYED_COMMIT);}
  const unique=new Map();for(const ref of refs){const sha=execFileSync('git',['rev-parse',`${ref}^{commit}`],{encoding:'utf8'}).trim();unique.set(sha,ref);}
  for(const [sha,ref] of unique)await test(`compatibilidad: servidor real ${ref} (${sha.slice(0,8)}) y nuevo comparten Expand`,async()=>{
+  const hasIsolation=execFileSync('git',['show',`${sha}:src/lib/billing/runtime.ts`],{encoding:'utf8'}).includes('billing_apply_sync_v2');
   const names=['MERCADOPAGO_ENVIRONMENT','MERCADOPAGO_SELLER_ID','BILLING_TEST_USER_ID','MERCADOPAGO_ACCESS_TOKEN','MERCADOPAGO_PRO_PLAN_ID','MERCADOPAGO_WEBHOOK_SECRET','SUPABASE_SECRET_KEY','VERCEL','VERCEL_ENV'];
   const saved=Object.fromEntries(names.map(n=>[n,process.env[n]]));
   try {
@@ -99,7 +107,7 @@ export async function compatibilityTests({pg,A,B,test,scalar}) {
    const old=server(pg,sha,'101'),modern=server(pg,null,'101'),runtime=old.load('src/lib/billing/runtime.ts'),v2=modern.load('src/lib/billing/runtime.ts');
    const checkout=await runtime.subscribe(A,'buyer@example.invalid');assert.match(checkout.checkout_url,/mercadopago/);
    const a=(await pg.query(`select * from billing_agreements where owner_id='${A}'`)).rows[0];
-   assert.equal(a.environment,'legacy');assert.equal(a.seller_id,null);
+   assert.equal(a.environment,hasIsolation?'production':'legacy');assert.equal(a.seller_id,hasIsolation?'101':null);
    assert.equal((await runtime.getUserEntitlements(A)).premium,false);
    const invoice=old.approve(a.provider_subscription_id);
    const requestId='compat-request',ts=String(Date.now()),id=a.provider_subscription_id,secret=process.env.MERCADOPAGO_WEBHOOK_SECRET;
@@ -113,7 +121,7 @@ export async function compatibilityTests({pg,A,B,test,scalar}) {
    assert.equal((await runtime.reconcile()).failed,0);
    assert.equal((await runtime.cancel(A)).canceled,true);
    assert.equal((await runtime.getUserEntitlements(A)).premium,true);
-   assert.equal(await scalar(`select environment from billing_agreements where id='${a.id}'`),'legacy');
+   assert.equal(await scalar(`select environment from billing_agreements where id='${a.id}'`),hasIsolation?'production':'legacy');
    // New server performs its own real subscription and verified promotion.
    await v2.subscribe(B,'second-buyer@example.invalid');
    const b=(await pg.query(`select * from billing_agreements where owner_id='${B}'`)).rows[0];modern.approve(b.provider_subscription_id);
