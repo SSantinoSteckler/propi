@@ -1,1 +1,9 @@
-{ "framework": "nextjs", "crons": [{ "path": "/api/billing/reconcile", "schedule": "*/10 * * * *" }] }
+{
+  "framework": "nextjs",
+  "crons": [
+    {
+      "path": "/api/billing/reconcile",
+      "schedule": "0 6 * * *"
+    }
+  ]
+}
