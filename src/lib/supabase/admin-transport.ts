@@ -1,4 +1,5 @@
 import { BillingError } from "../billing/domain";
+import { logAdminAuthFailure } from "./admin-diagnostics";
 
 // Administrative REST only. The official SDK remains responsible for queries;
 // this final fetch boundary prevents opaque keys becoming Bearer JWTs.
@@ -14,6 +15,8 @@ export function createAdminFetch(url: string, key: string, send: typeof fetch = 
     if (key.startsWith("sb_secret_")) headers.delete("authorization");
     else headers.set("authorization", `Bearer ${key}`);
     headers.set("user-agent", `propi-billing-server/1.0 Node.js/${process.versions.node}`);
-    return send(input, { ...options, headers, redirect: "error", signal: options?.signal || AbortSignal.timeout(10000) });
+    const response = await send(input, { ...options, headers, redirect: "error", signal: options?.signal || AbortSignal.timeout(10000) });
+    await logAdminAuthFailure(response, key, headers, target.pathname);
+    return response;
   };
 }
