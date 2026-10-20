@@ -1,5 +1,10 @@
 # Precio temporal global: AR$ 50 por mes
 
+Estado actual: prueba finalizada. Se retiro `temporaryAmount` del catalogo y las
+nuevas contrataciones vuelven a AR$ 14.900 al publicar este cambio. Los acuerdos
+creados a AR$ 50 conservan su importe. Las instrucciones siguientes documentan
+la prueba temporal y su cierre.
+
 El servidor fija AR$ 50 para todas las nuevas contrataciones mediante
 `temporaryAmount` en `src/lib/billing/catalog.json`. No requiere un UID ni
 variables nuevas. El navegador no decide el importe.

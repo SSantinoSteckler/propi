@@ -39,7 +39,7 @@ function database(pg) {
  };
 }
 
-function server(pg,ref,sellerId,site='https://local-billing.example') {
+function server(pg,ref,sellerId,site='https://local-billing.example',catalogOverride) {
  const instance=++serverSequence;
  const db=database(pg),cache=new Map(),subscriptions=new Map(),invoices=new Map(),payments=new Map(),calls=[];let sequence=0;
  const stamp=()=>new Date(Date.now()-60000+(sequence++)).toISOString();
@@ -67,7 +67,7 @@ function server(pg,ref,sellerId,site='https://local-billing.example') {
  function load(file) {
   if(cache.has(file))return cache.get(file).exports;
   const source=ref?execFileSync('git',['show',`${ref}:${file}`],{encoding:'utf8'}):readFileSync(file,'utf8');
-  if(file.endsWith('.json'))return JSON.parse(source);
+  if(file.endsWith('.json'))return file==='src/lib/billing/catalog.json'&&catalogOverride ? structuredClone(catalogOverride) : JSON.parse(source);
   const module={exports:{}};cache.set(file,module);
   function resolve(spec) {
    if(spec==='server-only')return {};
@@ -186,8 +186,12 @@ export async function checkoutOfferTests({pg,A,B,test,scalar}) {
   try {
    Object.assign(process.env,{MERCADOPAGO_ENVIRONMENT:'production',MERCADOPAGO_SELLER_ID:'1355208203',MERCADOPAGO_ACCESS_TOKEN:'launch-fixture-not-real',MERCADOPAGO_PRO_PLAN_ID:'catalog',MERCADOPAGO_WEBHOOK_SECRET:'launch-fixture-webhook',SUPABASE_SECRET_KEY:'launch-fixture-not-real'});
    delete process.env.VERCEL;delete process.env.VERCEL_ENV;
-   const modern=server(pg,null,'1355208203'),runtime=modern.load('src/lib/billing/runtime.ts');
-   const previous=server(pg,'50cddf2ada4eaf6ae635b00bbdb13cb2f5c6193a','1355208203'),normal=previous.load('src/lib/billing/runtime.ts');
+   const commercial=JSON.parse(readFileSync('src/lib/billing/catalog.json','utf8'));
+   assert.equal(commercial.amount,14900);assert.equal(commercial.temporaryAmount,undefined);
+   const modern=server(pg,null,'1355208203','https://local-billing.example',{...commercial,temporaryAmount:50}),runtime=modern.load('src/lib/billing/runtime.ts');
+   const previous=server(pg,null,'1355208203'),normal=previous.load('src/lib/billing/runtime.ts');
+   assert.equal((await normal.status(A,false)).catalog.amount,14900);
+   assert.equal((await normal.status(A,false)).temporary_price,false);
    assert.equal((await runtime.status(A,false)).catalog.amount,50);
    assert.equal((await runtime.status(B,false)).catalog.amount,50);
    // Preserve a pending contract made at the original public price.
@@ -217,7 +221,7 @@ export async function checkoutOfferTests({pg,A,B,test,scalar}) {
    assert.equal((await runtime.getUserEntitlements(A)).premium,true);assert.equal((await runtime.getUserEntitlements(B)).premium,false);
    assert.equal(await scalar(`select count(*)::int from subscription_payments where owner_id='${A}' and amount=50 and verified`),1);
    assert.equal(await scalar('select count(*)::int from billing_test_agreements'),0);
-   // The previous server has a 14900 catalog, yet validates the paid 50 ledger.
+   // The restored current server validates paid 50 contracts against their ledger.
    for(const kind of ['subscriptions','invoices','payments'])for(const [id,value] of modern[kind])previous[kind].set(id,value);
    await normal.synchronize(A);
    assert.equal((await normal.status(A,false)).catalog.amount,14900);

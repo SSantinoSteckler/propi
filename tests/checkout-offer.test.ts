@@ -4,10 +4,10 @@ import catalog from '../src/lib/billing/catalog.json' with { type: 'json' };
 import { subscribeSchema } from '../src/lib/billing/http';
 
 test('precio temporal global de AR$ 50 conserva plan comercial de AR$ 14900',()=>{
- expect(checkoutOffer()).toMatchObject({catalog:{amount:50,currency:'ARS'},temporaryPrice:true});
+ expect(checkoutOffer({...catalog,temporaryAmount:50})).toMatchObject({catalog:{amount:50,currency:'ARS'},temporaryPrice:true});
  expect(catalog.amount).toBe(14900);
- const {temporaryAmount: _temporary, ...restored}=catalog;
- expect(checkoutOffer(restored)).toMatchObject({catalog:{amount:14900},temporaryPrice:false});
+ expect(checkoutOffer()).toMatchObject({catalog:{amount:14900},temporaryPrice:false});
+ expect(catalog).not.toHaveProperty('temporaryAmount');
 });
 
 test('importe temporal inválido se rechaza y navegador no puede fijar precio',()=>{
