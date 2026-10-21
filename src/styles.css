@@ -367,21 +367,6 @@ small {
   background: linear-gradient(90deg, #191b1ef2 0%, #191b1edb 35%, #191b1e80 70%, #191b1eb0 100%),
     linear-gradient(0deg, var(--paper), transparent 22%);
 }
-.hero-playback {
-  position: absolute;
-  right: 30px;
-  bottom: 18px;
-  z-index: 2;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 8px 12px;
-  border: 1px solid var(--control-line);
-  border-radius: 100px;
-  background: var(--surface);
-  color: var(--text);
-  font-size: 10px;
-}
 .pill {
   display: inline-flex;
   align-items: center;
@@ -509,6 +494,9 @@ small {
   height: 5px;
   background: var(--surface-raised);
   border-radius: 50%;
+}
+.preview-profile-link {
+  display: block;
 }
 .preview-cover {
   height: 143px;
@@ -1761,6 +1749,11 @@ input[type="color"] {
   flex-direction: column;
   padding: 32px 20px;
   z-index: 30;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+}
+.sidebar > * {
+  flex-shrink: 0;
 }
 .sidebar > .logo {
   margin: 0 12px;
@@ -3873,8 +3866,19 @@ blockquote strong {
   }
   .sidebar {
     width: 235px;
+    /* Follow Safari's visible height as its browser bars expand/collapse. */
+    bottom: auto;
+    height: 100%;
+    height: 100dvh;
+    padding-top: max(24px, env(safe-area-inset-top, 0px));
+    padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px));
     transform: translateX(-100%);
     transition: transform 0.2s;
+  }
+  .sidebar .logout {
+    min-height: 44px;
+    margin-top: 12px;
+    padding: 12px 15px;
   }
   .sidebar.open {
     transform: translateX(0);

@@ -14,7 +14,7 @@ export const metadata: Metadata = {
 };
 export async function generateViewport(): Promise<Viewport> {
   const dark = (await cookies()).get("propi-theme")?.value === "dark";
-  return { width: "device-width", initialScale: 1, themeColor: dark ? "#191b1e" : "#faf8f4" };
+  return { width: "device-width", initialScale: 1, viewportFit: "cover", themeColor: dark ? "#191b1e" : "#faf8f4" };
 }
 export default async function RootLayout({
   children,

@@ -83,10 +83,6 @@ export default function Landing() {
         <HeroBackground />
         <section className="hero container">
           <div className="hero-copy">
-            <div className="pill">
-              <span className="live-dot" />
-              Tu nombre en la puerta. Tu catálogo adentro.
-            </div>
             <h1>
               Todas tus
               <br />
@@ -133,6 +129,7 @@ export default function Landing() {
                 </div>
                 <ArrowUpRight size={12} />
               </div>
+              <Link href="/ejemplo" className="preview-profile-link" aria-label="Ver portfolio de ejemplo de Martina González">
               <div className="preview-cover">
                 <img
                   src={photo(photos[4], 1000)}
@@ -159,6 +156,7 @@ export default function Landing() {
               <p className="preview-bio">
                 Te acompaño a encontrar tu próximo lugar.
               </p>
+              </Link>
               <div className="preview-list-head">
                 <strong>Encontrá tu próximo espacio</strong>
                 <span>

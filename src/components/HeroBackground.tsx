@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Pause, Play } from "lucide-react";
 import media from "../lib/hero-media.json";
 
 export function HeroBackground() {
@@ -11,7 +10,6 @@ export function HeroBackground() {
   const [visible, setVisible] = useState(true);
   const [failed, setFailed] = useState(false);
   const [started, setStarted] = useState(false);
-  const [paused, setPaused] = useState(false);
   const [posterFailed, setPosterFailed] = useState(false);
 
   useEffect(() => {
@@ -44,9 +42,9 @@ export function HeroBackground() {
   useEffect(() => {
     const element = video.current;
     if (!element) return;
-    if (visible && !paused) void element.play().catch(() => setPaused(true));
+    if (visible) void element.play().catch(() => setFailed(true));
     else element.pause();
-  }, [allowed, visible, paused]);
+  }, [allowed, visible]);
 
   return (
     <div className="hero-film" ref={container}>
@@ -59,13 +57,6 @@ export function HeroBackground() {
             onPlay={() => setStarted(true)} onError={() => setFailed(true)} />
         )}
       </div>
-      {allowed && !failed && started && (
-        <button type="button" className="hero-playback" onClick={() => setPaused(!paused)}
-          aria-label={paused ? "Reproducir video de fondo" : "Pausar video de fondo"}>
-          {paused ? <Play size={14} aria-hidden="true" /> : <Pause size={14} aria-hidden="true" />}
-          <span>{paused ? "Reproducir fondo" : "Pausar fondo"}</span>
-        </button>
-      )}
     </div>
   );
 }
