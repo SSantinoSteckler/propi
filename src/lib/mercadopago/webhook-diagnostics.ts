@@ -1,3 +1,5 @@
+import { isHostedDeployment } from "../deployment";
+
 export type WebhookStage = "validation" | "dependencies" | "scope" | "database_client" | "rate_limit" | "event_store" | "event_processing";
 
 const codes = new Set([
@@ -14,7 +16,7 @@ export async function logWebhookFailure(
   env: Record<string, string | undefined> = process.env,
   write: (line: string) => void = console.warn,
 ) {
-  if (env.NODE_ENV !== "development" || env.MERCADOPAGO_ENVIRONMENT !== "test" || env.VERCEL || env.VERCEL_ENV || response.status < 400) return;
+  if (env.NODE_ENV !== "development" || env.MERCADOPAGO_ENVIRONMENT !== "test" || isHostedDeployment(env) || response.status < 400) return;
   try {
     const body = await response.clone().json();
     let code = codes.has(body?.code) ? body.code : "UNCLASSIFIED_ERROR";

@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { isNetlifyPreview } from "./lib/deployment";
 export function proxy(request: NextRequest) {
-  const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
+  const nonce = btoa(crypto.randomUUID());
   const development = process.env.NODE_ENV !== "production";
   let supabase = "";
   try {
@@ -35,7 +36,7 @@ export function proxy(request: NextRequest) {
     "camera=(), microphone=(), geolocation=()",
   );
   if (
-    /^\/(dashboard|onboarding|login|registro|recuperar|actualizar-clave|r|c|ejemplo|ejemplo-coleccion)(\/|$)/.test(
+    isNetlifyPreview() || /^\/(dashboard|onboarding|login|registro|recuperar|actualizar-clave|r|c|ejemplo|ejemplo-coleccion)(\/|$)/.test(
       request.nextUrl.pathname,
     )
   )

@@ -39,7 +39,7 @@ function database(pg) {
  };
 }
 
-function server(pg,ref,sellerId,site='https://local-billing.example',catalogOverride) {
+function server(pg,ref,sellerId,site='https://local-billing.example',catalogOverride,catalogSite=site) {
  const instance=++serverSequence;
  const db=database(pg),cache=new Map(),subscriptions=new Map(),invoices=new Map(),payments=new Map(),calls=[];let sequence=0;
  const stamp=()=>new Date(Date.now()-60000+(sequence++)).toISOString();
@@ -48,8 +48,8 @@ function server(pg,ref,sellerId,site='https://local-billing.example',catalogOver
  async function mp(path,method='GET',body) {
   calls.push({path,method});const url=new URL(path,'https://provider.invalid');
   if(path==='/users/me')return {id:Number(sellerId),site_id:'MLA',tags:sellerId==='3779671542'?['test_user']:[]};
-  if(path==='/preapproval_plan/catalog')return {id:'catalog',collector_id:Number(sellerId),status:'active',reason:'Propi Premium',back_url:`${site}/dashboard/billing/return`,auto_recurring:recurring};
-  if(path==='/preapproval'&&method==='POST'){const id=`sub-${sellerId}-${instance}-${++sequence}`,s={id,collector_id:Number(sellerId),payer_id:202,external_reference:body.external_reference,status:'pending',auto_recurring:structuredClone(body.auto_recurring || recurring),last_modified:stamp(),init_point:`https://www.mercadopago.com.ar/subscriptions/checkout?preapproval_id=${id}`};subscriptions.set(id,s);return structuredClone(s);}
+  if(path==='/preapproval_plan/catalog')return {id:'catalog',collector_id:Number(sellerId),status:'active',reason:'Propi Premium',back_url:`${catalogSite}/dashboard/billing/return`,auto_recurring:recurring};
+  if(path==='/preapproval'&&method==='POST'){const id=`sub-${sellerId}-${instance}-${++sequence}`,s={id,collector_id:Number(sellerId),payer_id:202,external_reference:body.external_reference,status:'pending',back_url:body.back_url,auto_recurring:structuredClone(body.auto_recurring || recurring),last_modified:stamp(),init_point:`https://www.mercadopago.com.ar/subscriptions/checkout?preapproval_id=${id}`};subscriptions.set(id,s);return structuredClone(s);}
   if(url.pathname==='/preapproval/search')return {results:[...subscriptions.values()],paging:{total:subscriptions.size}};
   if(url.pathname.startsWith('/preapproval/')){const id=url.pathname.split('/').at(-1),s=subscriptions.get(id);if(!s)throw new ProviderError(404);if(method==='PUT')Object.assign(s,body,{last_modified:stamp()});return structuredClone(s);}
   if(url.pathname==='/authorized_payments/search'){
@@ -176,6 +176,45 @@ export async function compatibilityTests({pg,A,B,test,scalar}) {
    assert.equal(invoice.preapproval_id,a.provider_subscription_id);
    console.log(`  Git verificado: ${ref}=${sha}; proveedor simulado, SQL real en memoria`);
   } finally {for(const name of names)if(saved[name]===undefined)delete process.env[name];else process.env[name]=saved[name];}
+ });
+}
+
+export async function netlifyMigrationTests({pg,A,B,test,scalar}) {
+ await test('migracion de hosting: conserva cobros y acceso, cancela acuerdo anterior y usa nuevo retorno sin recrear el plan',async()=>{
+  const names=['MERCADOPAGO_ENVIRONMENT','MERCADOPAGO_SELLER_ID','MERCADOPAGO_ACCESS_TOKEN','MERCADOPAGO_PRO_PLAN_ID','MERCADOPAGO_WEBHOOK_SECRET','MERCADOPAGO_CATALOG_SITE_URL','SUPABASE_SECRET_KEY','VERCEL','VERCEL_ENV','NETLIFY','SITE_ID','PROPI_HOSTING_PLATFORM','PROPI_DEPLOY_CONTEXT'];
+  const saved=Object.fromEntries(names.map(name=>[name,process.env[name]]));
+  try {
+   for(const name of ['VERCEL','VERCEL_ENV','NETLIFY','SITE_ID','PROPI_HOSTING_PLATFORM','PROPI_DEPLOY_CONTEXT','MERCADOPAGO_CATALOG_SITE_URL'])delete process.env[name];
+   Object.assign(process.env,{MERCADOPAGO_ENVIRONMENT:'production',MERCADOPAGO_SELLER_ID:'1355208203',MERCADOPAGO_ACCESS_TOKEN:'migration-fixture-not-real',MERCADOPAGO_PRO_PLAN_ID:'catalog',MERCADOPAGO_WEBHOOK_SECRET:'migration-webhook-fixture',SUPABASE_SECRET_KEY:'migration-fixture-not-real'});
+   const oldSite='https://propi-psi.vercel.app',newSite='https://migration-fixture.netlify.app';
+   const old=server(pg,null,'1355208203',oldSite),previous=old.load('src/lib/billing/runtime.ts');
+   await previous.subscribe(A,'buyer@example.invalid');
+   const a=(await pg.query(`select * from billing_agreements where owner_id='${A}'`)).rows[0];
+   old.approve(a.provider_subscription_id);await previous.synchronize(A);
+   const coverage=await previous.getUserEntitlements(A);
+   assert.equal(coverage.premium,true);
+   const countBefore=await scalar(`select count(*)::int from subscription_payments where owner_id='${A}'`);
+   const registryBefore=await scalar('select count(*)::int from billing_plan_registry');
+   Object.assign(process.env,{SITE_ID:'migration-fixture',PROPI_DEPLOY_CONTEXT:'production',MERCADOPAGO_CATALOG_SITE_URL:oldSite});
+   const next=server(pg,null,'1355208203',newSite,undefined,oldSite),runtime=next.load('src/lib/billing/runtime.ts');
+   for(const kind of ['subscriptions','invoices','payments'])for(const [id,value] of old[kind])next[kind].set(id,value);
+   await runtime.synchronize(A);
+   assert.deepEqual(await runtime.getUserEntitlements(A),coverage);
+   assert.equal(await scalar(`select count(*)::int from subscription_payments where owner_id='${A}'`),countBefore);
+   assert.equal((await runtime.cancel(A)).canceled,true);
+   assert.equal((await runtime.getUserEntitlements(A)).premium,true);
+   await runtime.subscribe(B,'new-buyer@example.invalid');
+   const b=(await pg.query(`select * from billing_agreements where owner_id='${B}'`)).rows[0];
+   assert.equal(Number(b.amount),14900);assert.equal(b.seller_id,'1355208203');
+   assert.equal(next.subscriptions.get(b.provider_subscription_id).back_url,`${newSite}/dashboard/billing/return`);
+   assert.equal(next.calls.filter(call=>call.method==='POST'&&call.path==='/preapproval').length,1);
+   assert.equal(next.calls.filter(call=>call.path.startsWith('/preapproval_plan')&&call.method!=='GET').length,0);
+   assert.equal(await scalar('select count(*)::int from billing_plan_registry'),registryBefore);
+   process.env.PROPI_DEPLOY_CONTEXT='deploy-preview';
+   const requests=next.calls.length;
+   await assert.rejects(runtime.status(B,true),/BILLING_PREVIEW_DISABLED/);
+   assert.equal(next.calls.length,requests);
+  }finally{for(const name of names)if(saved[name]===undefined)delete process.env[name];else process.env[name]=saved[name];}
  });
 }
 

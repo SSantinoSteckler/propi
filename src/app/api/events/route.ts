@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto";
 import { z } from "zod";
 import { SITE_URL } from "../../../lib/config";
 import { createAdminFetch } from "../../../lib/supabase/admin-transport";
+import { hostingPlatform, isNetlifyPreview } from "../../../lib/deployment";
 const schema = z.object({
   username: z.string().regex(/^[a-z0-9-]{3,48}$/),
   kind: z.enum(["portfolio", "property", "collection", "whatsapp", "social"]),
@@ -18,6 +19,7 @@ const reply = (status: number) =>
 export async function POST(request: Request) {
   if (request.headers.get("origin") !== SITE_URL)
     return reply(403);
+  if (isNetlifyPreview()) return reply(204);
   if (
     /bot|crawler|spider|headless|preview|curl|wget/i.test(
       request.headers.get("user-agent") || "",
@@ -43,7 +45,7 @@ export async function POST(request: Request) {
     // El SDK solo se carga cuando la ingesta tiene configuración de servidor.
     const { createClient } = await import("@supabase/supabase-js");
     const ip = (
-      request.headers.get("x-vercel-forwarded-for") ||
+      (hostingPlatform() === "netlify" ? request.headers.get("x-nf-client-connection-ip") : request.headers.get("x-vercel-forwarded-for")) ||
       request.headers.get("x-forwarded-for") ||
       "local"
     ).split(",")[0];

@@ -4,6 +4,11 @@ function localTunnelOrigins() {
   try { return [new URL(process.env.NEXT_PUBLIC_SITE_URL || "").hostname]; } catch { return []; }
 }
 const config: NextConfig = {
+  // Public build metadata only: never put credentials in next.config env.
+  env: {
+    PROPI_HOSTING_PLATFORM: process.env.NETLIFY === "true" ? "netlify" : process.env.VERCEL ? "vercel" : "local",
+    PROPI_DEPLOY_CONTEXT: process.env.NETLIFY === "true" ? process.env.CONTEXT || "unknown" : process.env.VERCEL_ENV || "local",
+  },
   allowedDevOrigins: localTunnelOrigins(),
   poweredByHeader: false,
   htmlLimitedBots: /.*/,

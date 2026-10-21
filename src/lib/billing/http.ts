@@ -12,6 +12,7 @@ async function body(request: Request) {
   try { return JSON.parse(text); } catch { throw new BillingError("INVALID_REQUEST", 400); }
 }
 const messages: Record<string,string> = {
+  BILLING_PREVIEW_DISABLED: "La facturación está deshabilitada en esta vista previa. Administrá tu suscripción desde el sitio principal de Propi.",
   TEST_USER_ONLY: "Esta prueba está habilitada únicamente para la cuenta ficticia designada.",
   INVALID_PRICE_CONFIGURATION: "No pudimos validar el precio de la suscripción.",
   CHECKOUT_PRICE_CHANGED: "Ya tenés una suscripción iniciada con otro importe. Revisala antes de continuar; no cambiamos su precio automáticamente.",

@@ -1,6 +1,8 @@
 import type { MetadataRoute } from "next";
 import { webOrigin } from "@/lib/seo";
+import { isNetlifyPreview } from "@/lib/deployment";
 export default function robots(): MetadataRoute.Robots {
+  if (isNetlifyPreview()) return { rules: { userAgent: "*", disallow: "/" } };
   return {
     rules: {
       userAgent: "*",

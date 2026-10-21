@@ -129,7 +129,9 @@ export async function subscribe(owner: string, payerEmail: string, db = adminDb(
     }
     const plan = await mp<MPPlan>(`/preapproval_plan/${encodeURIComponent(process.env.MERCADOPAGO_PRO_PLAN_ID!)}`);
     const scope = billingScope(), returnUrl = billingReturnUrl(SITE_URL);
-    validatePlan(plan, seller, returnUrl, scope.environment === "test");
+    const catalogReturn = process.env.MERCADOPAGO_CATALOG_SITE_URL
+      ? billingReturnUrl(process.env.MERCADOPAGO_CATALOG_SITE_URL) : returnUrl;
+    validatePlan(plan, seller, returnUrl, scope.environment === "test", catalogReturn);
     return reservedCreation({
      reserve: async () => checked(await db.from(billingTable("billing_agreements", billingScope())).insert({ owner_id: owner, catalog_plan_id: plan.id, environment: scope.environment, seller_id: seller,
       amount: offer.catalog.amount, currency: plan.auto_recurring.currency_id }).select().single()) as Agreement,

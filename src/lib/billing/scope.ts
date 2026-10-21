@@ -1,5 +1,6 @@
 import { BillingError, requireCondition } from "./domain";
 import type { Agreement } from "./types";
+import { isHostedDeployment, isNetlifyPreview } from "../deployment";
 
 export const TEST_SELLER_ID = "3779671542";
 export type BillingScope = { environment: "test" | "production"; sellerId: string; testUserId?: string };
@@ -7,11 +8,12 @@ type Environment = Record<string, string | undefined>;
 
 // No credentials or browser-provided values determine the owner of a test.
 export function billingScope(env: Environment = process.env): BillingScope {
+  if (isNetlifyPreview(env)) throw new BillingError("BILLING_PREVIEW_DISABLED", 503);
   const environment = env.MERCADOPAGO_ENVIRONMENT || "production";
   const sellerId = env.MERCADOPAGO_SELLER_ID;
   if (!["test", "production"].includes(environment) || !sellerId || !/^[1-9][0-9]{0,19}$/.test(sellerId)) throw new BillingError("BILLING_NOT_CONFIGURED", 503);
   if (environment === "test") {
-    if (env.VERCEL || env.VERCEL_ENV || sellerId !== TEST_SELLER_ID || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(env.BILLING_TEST_USER_ID || "")) throw new BillingError("INVALID_TEST_CONFIGURATION", 503);
+    if (isHostedDeployment(env) || sellerId !== TEST_SELLER_ID || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(env.BILLING_TEST_USER_ID || "")) throw new BillingError("INVALID_TEST_CONFIGURATION", 503);
     return { environment, sellerId, testUserId: env.BILLING_TEST_USER_ID!.toLowerCase() };
   }
   if (sellerId === TEST_SELLER_ID) throw new BillingError("INVALID_SELLER", 503);

@@ -12,7 +12,7 @@ const root = resolve('src');
 const allowed = new Set([
  'lib/supabase/admin-transport.ts', 'lib/supabase/admin-diagnostics.ts',
  'lib/billing/domain.ts', 'lib/billing/catalog.json',
- 'app/api/events/route.ts', 'lib/config.ts',
+ 'app/api/events/route.ts', 'lib/config.ts', 'lib/deployment.ts',
 ].map(file => resolve(root,file)));
 const cache = new Map();
 function load(filename) {
