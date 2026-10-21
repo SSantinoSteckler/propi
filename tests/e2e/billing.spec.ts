@@ -57,7 +57,8 @@ test('retorno pendiente no activa Premium y cancelación conserva cobertura paga
  });
  await page.getByRole('button',{name:'Cancelar renovación'}).click();
  await page.getByRole('button',{name:'Confirmar cancelación'}).click();
- await expect(page.getByText('La renovación está cancelada.',{exact:false})).toBeVisible();
+ await expect(page.getByText('La renovación de Premium está cancelada.',{exact:false})).toBeVisible();
+ await expect(page.getByRole('button',{name:'Cancelar renovación'})).toHaveCount(0);
  await expect(page.getByRole('heading',{name:'Premium',exact:true})).toBeVisible();
  await expect(page.getByText('Acceso ya abonado hasta el',{exact:false})).toBeVisible();
  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);

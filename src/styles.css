@@ -1196,6 +1196,54 @@ small {
   padding-top: 15px;
   max-width: 500px;
 }
+/* The closing card's soft light and circular forms recur across the landing. */
+.landing-main {
+  --landing-glow: color-mix(in srgb, var(--accent-fill) 18%, transparent);
+  --landing-soft-glow: color-mix(in srgb, var(--accent-fill) 9%, transparent);
+}
+.landing-main .hero-visual:before {
+  background:
+    radial-gradient(ellipse at 80% 15%, var(--landing-glow), transparent 65%),
+    linear-gradient(145deg, var(--surface-soft), transparent);
+}
+.landing-main .value-strip {
+  background:
+    linear-gradient(110deg, transparent 10%, var(--landing-soft-glow) 55%, transparent),
+    var(--surface-soft);
+}
+.landing-main .step {
+  background:
+    radial-gradient(ellipse at 100% 100%, var(--landing-soft-glow), transparent 65%),
+    var(--surface);
+}
+.landing-main .step:last-child {
+  background:
+    radial-gradient(ellipse at 100% 100%, var(--landing-glow), transparent 75%),
+    var(--surface);
+}
+.landing-main .ambient-panel,
+.landing-main .plan-pro {
+  background:
+    radial-gradient(ellipse at 100% 0%, var(--landing-glow), transparent 65%),
+    linear-gradient(125deg, var(--surface), var(--surface-soft));
+}
+.landing-main .ambient-panel {
+  position: relative;
+  isolation: isolate;
+}
+.landing-main .plan-pro {
+  border-color: color-mix(in srgb, var(--accent-fill) 38%, var(--line));
+  box-shadow: 0 14px 40px var(--shadow);
+}
+.landing-main .feature-small {
+  background:
+    radial-gradient(ellipse at 0% 100%, var(--landing-soft-glow), transparent 65%),
+    var(--surface);
+}
+.landing-main .feature-icon {
+  background: linear-gradient(135deg, var(--surface-soft), color-mix(in srgb, var(--accent-fill) 15%, var(--surface)));
+  color: var(--accent-text);
+}
 .final-cta {
   background: var(--surface-deep);
   border-radius: 12px;
@@ -1206,9 +1254,11 @@ small {
   padding: 42px 46px;
   color: var(--muted);
   position: relative;
+  isolation: isolate;
   overflow: hidden;
 }
-.final-cta:after {
+.final-cta:after,
+.landing-main .ambient-panel:after {
   content: "";
   position: absolute;
   right: -45px;
@@ -1218,6 +1268,7 @@ small {
   border: 1px solid var(--ambient-line);
   border-radius: 50%;
   pointer-events: none;
+  z-index: -1;
   box-shadow:
     0 0 0 40px var(--ambient-ring),
     0 0 0 90px var(--ambient-ring);
@@ -1235,6 +1286,57 @@ small {
   position: relative;
   z-index: 1;
   white-space: nowrap;
+}
+.landing-contact {
+  padding-top: 36px;
+}
+.contact-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: clamp(24px, 4vw, 40px);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.contact-card > div {
+  flex: 1 1 280px;
+}
+.contact-card h2 {
+  font-size: 26px;
+  line-height: 1.3;
+  margin-bottom: 10px;
+}
+.contact-card p {
+  max-width: 520px;
+  font-size: 12px;
+  line-height: 1.8;
+}
+.contact-email {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--accent-text);
+  font-size: 14px;
+  font-weight: 600;
+}
+.contact-email span {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.contact-email svg {
+  flex-shrink: 0;
+}
+.contact-email:hover span {
+  text-decoration: underline;
+}
+.legal-page > .contact-card {
+  margin-top: 32px;
 }
 .footer {
   display: flex;

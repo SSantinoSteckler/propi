@@ -23,6 +23,8 @@ import { Logo } from "../components/ui";
 import { ThemeToggle } from "../features/theme/ThemeProvider";
 import { HeroBackground } from "../components/HeroBackground";
 import { PropertyCard } from "../components/PropertyCard";
+import { ContactCard } from "../components/ContactCard";
+import { SUPPORT_EMAIL } from "../lib/contact";
 import { demoProperties, demoPortfolio, photo, photos } from "../lib/demo";
 import billingCatalog from "../lib/billing/catalog.json";
 const faqs = [
@@ -78,7 +80,7 @@ export default function Landing() {
           </div>
         </div>
       </header>
-      <main>
+      <main className="landing-main">
         <div className="hero-stage">
         <HeroBackground />
         <section className="hero container">
@@ -284,7 +286,7 @@ export default function Landing() {
               </p>
             </div>
             <div className="feature-grid">
-              <div className="feature-large">
+              <div className="feature-large ambient-panel">
                 <div className="feature-text">
                   <span className="feature-icon">
                     <Layers />
@@ -500,6 +502,7 @@ export default function Landing() {
             </Link>
           </div>
         </section>
+        {SUPPORT_EMAIL && <div id="contacto" className="container landing-contact"><ContactCard /></div>}
       </main>
       <footer className="container footer">
         <div>
@@ -509,6 +512,7 @@ export default function Landing() {
         <div>
           <Link href="/privacidad">Privacidad</Link>
           <Link href="/terminos">Términos</Link>
+          {SUPPORT_EMAIL && <a href="#contacto">Contacto</a>}
           <a href="#planes">Planes</a>
           <span>© {new Date().getFullYear()} Propi</span>
         </div>

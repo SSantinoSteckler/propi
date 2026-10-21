@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import { z } from "zod";
 import { SITE_URL } from "../../../lib/config";
+import { createAdminFetch } from "../../../lib/supabase/admin-transport";
 const schema = z.object({
   username: z.string().regex(/^[a-z0-9-]{3,48}$/),
   kind: z.enum(["portfolio", "property", "collection", "whatsapp", "social"]),
@@ -53,6 +54,7 @@ export async function POST(request: Request) {
       .digest("hex");
     const client = createClient(url, key, {
       auth: { persistSession: false, autoRefreshToken: false },
+      global: { fetch: createAdminFetch(url, key) },
     });
     const v = parsed.data;
     const { error } = await client.rpc("record_event", {

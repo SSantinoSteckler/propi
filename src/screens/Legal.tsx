@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Logo } from "../components/ui";
+import { ContactCard } from "../components/ContactCard";
 export default function Legal({ privacy = false }: { privacy?: boolean }) {
   return (
     <main className="container legal-page">
@@ -8,17 +9,13 @@ export default function Legal({ privacy = false }: { privacy?: boolean }) {
         Volver al inicio
       </Link>
       <span className="eyebrow">
-        DOCUMENTO BASE · REVISIÓN DEL OPERADOR PENDIENTE
+        INFORMACIÓN DE PROPI
       </span>
       <h1>
         {privacy ? "Privacidad y datos personales" : "Condiciones de uso"}
       </h1>
       <p>
-        Versión de desarrollo — 19 de octubre de 2026. Antes del lanzamiento
-        público, el operador debe identificar su razón social, domicilio y un
-        canal efectivo de contacto para consultas, moderación y ejercicio de
-        derechos. Este documento requiere revisión profesional para el servicio
-        y la jurisdicción aplicables.
+        Última actualización: 21 de octubre de 2026.
       </p>
       {privacy ? (
         <>
@@ -64,23 +61,23 @@ export default function Legal({ privacy = false }: { privacy?: boolean }) {
           <p>
             El profesional puede editar o despublicar su contenido. Las
             solicitudes de acceso, rectificación, retiro de consentimiento,
-            supresión y revisión de reseñas deben canalizarse ante el operador
-            identificado antes del lanzamiento. La eliminación de una cuenta
-            debe procesarse de forma autenticada por el operador en Supabase,
-            incluyendo archivos, y considerar obligaciones de conservación
-            aplicables.
+            supresión y revisión de reseñas se reciben por el email de contacto
+            al final de esta página. Para proteger tu cuenta, podemos solicitar
+            información que permita comprobar tu identidad antes de procesar el
+            pedido. La eliminación debe considerar los archivos asociados y las
+            obligaciones de conservación aplicables.
           </p>
           <h2>Facturación</h2>
           <p>Mercado Pago procesa la autorización y los pagos. Propi conserva
             identificadores de suscripción y cobros, importes, estados y fechas
             para gestionar el acceso. No recibe ni almacena datos de tarjeta.
-            La conservación de comprobantes y obligaciones fiscales debe ser
-            definida e informada por el operador antes de habilitar los cobros.</p>
+            Para consultas sobre estos registros, podés escribirnos al email de
+            contacto al final de esta página.</p>
           <h2>Proveedores</h2>
           <p>
             El servicio utiliza Supabase para autenticación, datos y archivos y
-            Vercel para alojamiento. El operador debe informar regiones,
-            transferencias y condiciones aplicables al configurar producción.
+            Vercel para alojamiento. Podés consultar sobre el tratamiento de tu
+            información a través del canal de contacto indicado en esta página.
           </p>
         </>
       ) : (
@@ -121,12 +118,14 @@ export default function Legal({ privacy = false }: { privacy?: boolean }) {
           </p>
           <h2>Contacto y moderación</h2>
           <p>
-            Antes de habilitar el servicio público, el operador debe publicar un
-            canal de soporte y moderación, y establecer plazos para revisar
-            reportes, solicitudes sobre datos y apelaciones.
+            Podés enviarnos consultas, reportes de contenido o pedidos de
+            revisión al email de contacto al final de esta página. Los reportes
+            se revisan de forma manual; no eliminan automáticamente una reseña
+            ni modifican su calificación.
           </p>
         </>
       )}
+      <ContactCard />
     </main>
   );
 }

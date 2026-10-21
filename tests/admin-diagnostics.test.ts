@@ -92,7 +92,7 @@ test('respuesta 503 publica solo diagnóstico sanitizado y versión desplegada; 
  } finally { for(const name of names) { if(before[name]===undefined) delete process.env[name]; else process.env[name]=before[name]; } }
 });
 
-test('SDK oficial invoca RPC con sb_secret solo en apikey y sin JWT de usuario',async()=>{
+test('SDK oficial usa transporte seguro en RPC de facturación y analítica con claves nuevas y legacy',async()=>{
  const result=await promisify(execFile)(process.execPath,[resolve('tests/fixtures/admin-sdk-probe.mjs')]);
  expect(JSON.parse(result.stdout)).toEqual({sdkRpcPassed:true,requests:1});
 });

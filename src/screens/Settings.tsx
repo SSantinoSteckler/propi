@@ -5,6 +5,7 @@ import Link from "next/link";
 import { PageHeading } from "../components/ui";
 import { getPlan } from "../services/data";
 import { useAuth } from "../features/auth/AuthProvider";
+import { ContactCard } from "../components/ContactCard";
 export default function Settings() {
   const { session } = useAuth();
   const plan = useQuery({ queryKey: ["plan"], queryFn: getPlan });
@@ -47,13 +48,13 @@ export default function Settings() {
         <h2>Tus datos</h2>
         <p>
           Podés despublicar tu portfolio desde Mi portfolio. Para solicitudes
-          sobre datos o moderación, consultá los canales que el operador
-          configure antes del lanzamiento.
+          sobre datos o moderación, escribinos por el canal de contacto de abajo.
         </p>
         <Link className="text-link" href="/privacidad">
           Consultar política de privacidad
         </Link>
       </section>
+      <ContactCard />
     </>
   );
 }
